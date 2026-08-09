@@ -1,8 +1,10 @@
-// Everything the worker (the device sending SMS) touches: get a worker
-// token, pull the next SMS, report one as sent.
+// Everything the worker (the device sending SMS) touches: pull the next
+// SMS, report one as sent. Worker tokens themselves are NOT issued over
+// HTTP - see scripts/create-worker-token.js, run via `docker exec`/
+// `docker compose exec`. See _docs/worker-api.md.
 const express = require("express");
 const { pool } = require("./db");
-const { sha256Hex, generateToken } = require("./crypto");
+const { sha256Hex } = require("./crypto");
 
 const router = express.Router();
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
@@ -24,24 +26,6 @@ async function workerAuth(req, res, next) {
   req.worker = { workerTokenId: rows[0].id };
   next();
 }
-
-// Self-service: get a worker token for a device name. Open, no auth.
-// Registered before the /worker auth gate below so it stays unauthenticated
-// despite living under the /worker prefix.
-router.post("/worker/token", wrap(async (req, res) => {
-  const { name } = req.body || {};
-  if (typeof name !== "string" || name.trim() === "") {
-    return res.status(400).json({ error: "'name' is required" });
-  }
-
-  const token = generateToken("wk");
-  const [result] = await pool.query(`INSERT INTO worker_tokens (name, token_hash) VALUES (?, ?)`, [
-    name,
-    sha256Hex(token),
-  ]);
-
-  res.status(201).json({ id: result.insertId, name, token });
-}));
 
 router.use("/worker", workerAuth);
 

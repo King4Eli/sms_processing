@@ -2,34 +2,32 @@
 
 This is the complete guide for whatever eventually runs on the worker
 device (e.g. a single-board computer driving a GSM modem, or a phone). It
-never needs to touch anything else in this API — just these three routes.
+never needs to touch anything else in this API — just these two HTTP
+routes (token issuance is deliberately not one of them).
 Base URL: `http://<host>:<port>/api/v1`. Implementation: `api/src/workerApi.js`.
 
 ## 1. Get a worker token (once, per device)
 
-```
-POST /api/v1/worker/token
-Content-Type: application/json
+There is **no HTTP route for this** — a worker token grants full
+pull-and-complete access to every customer's queue, so it's issued from
+inside the running container, not over the network:
 
-{ "name": "worker-livingroom" }
-```
-
-- `name` — any string identifying this device. Required.
-
-Response `201`:
-
-```json
-{ "id": 1, "name": "worker-livingroom", "token": "wk_9f2c...redacted" }
+```bash
+docker compose exec api node scripts/create-worker-token.js "worker-livingroom"
 ```
 
-`token` is shown **once** — store it on the device (e.g. in a local config
-file or env var) and use it as a bearer token on every request below. This
-route is open (no auth) and unlimited, so a device can call it once during
-setup and keep the token indefinitely; there's no separate registration
-step or approval to wait on.
+(or `docker exec <container-id> node scripts/create-worker-token.js "worker-livingroom"`
+if not using compose). Output:
 
-Also available as a form at `/worker.html` on the frontend, if you'd
-rather generate a token by hand than script it.
+```
+Worker token created (id 1) for "worker-livingroom". Store it now, it will not be shown again:
+
+wk_9f2c...redacted
+```
+
+The token is shown **once** — store it on the device (e.g. in a local
+config file or env var) and use it as a bearer token on every request
+below. See `api/scripts/create-worker-token.js`.
 
 ## 2. GET the next message — `POST /worker/sms/pull`
 
@@ -107,4 +105,4 @@ loop forever:
     log_and_alert(sms.id)   # left at status=2, see above
 ```
 
-No rate limit applies to any of these three routes.
+No rate limit applies to either of these two routes.

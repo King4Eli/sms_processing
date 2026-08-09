@@ -114,20 +114,22 @@ rate-limit table, no IP dimension anywhere. Exceeding it returns `429`.
 To change a key's limit: `UPDATE api_keys SET daily_sms_limit = ? WHERE id
 = ?` — takes effect immediately, no restart.
 
-`/worker/*`, `/users/token`, and `/worker/token` are **not** rate
-limited.
+`/worker/*` and `/users/token` are **not** rate limited.
 
 ## Provisioning credentials
 
-Self-service, no auth required and no rate limit — anyone who can reach the
-API can mint a credential, as often as they want. This is intentional per
-current requirements, not an oversight: there is no signup/account system,
-so these are the only entry points that create `users` / `api_keys` /
-`worker_tokens` rows. In particular `/worker/token` hands out full
-pull-and-complete access to *every* customer's queued SMS to anyone who
-calls it, with nothing slowing down repeated calls — if that's ever a
-problem, put a gate in front of it (shared setup code, allowlist, etc.)
-before exposing this API publicly.
+**Customer API keys** are self-service, no auth required, no rate limit —
+`POST /users/token` (below). Anyone who can reach the API can mint one, as
+often as they want. This is intentional per current requirements, not an
+oversight: there is no signup/account system, so this is the only entry
+point that creates `users` / `api_keys` rows.
+
+**Worker tokens are different**: there is no HTTP route for creating one.
+A worker token grants full pull-and-complete access to *every* customer's
+queued SMS, so unlike API keys it's issued by running a script inside the
+container (`docker compose exec api node scripts/create-worker-token.js
+"<name>"`) — see [`worker-api.md`](./worker-api.md). This means only
+whoever has shell/exec access to the deployment can create one.
 
 ### Customer: get an API key
 
@@ -156,10 +158,6 @@ Creates the `users` row if the email hasn't been seen before, otherwise
 updates `phone_number`/`country` on the existing row. Also available via
 the "Get API key" page in `/frontend`.
 
-### Worker: get a worker token
-
-See [`worker-api.md`](./worker-api.md) for the full worker integration
-guide. Also available via the "Get worker token" page in `/frontend`.
-
-The plaintext credential is shown once in the response; only its SHA-256
+The plaintext credential is shown once (either in the HTTP response for
+API keys, or in the script's stdout for worker tokens); only its SHA-256
 hash is stored (`api_keys.key_hash` / `worker_tokens.token_hash`).
