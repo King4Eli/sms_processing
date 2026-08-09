@@ -1,108 +1,87 @@
-# Worker API — worker integration
+# Worker API
 
-This is the complete guide for whatever eventually runs on the worker
-device (e.g. a single-board computer driving a GSM modem, or a phone). It
-never needs to touch anything else in this API — just these two HTTP
-routes (token issuance is deliberately not one of them).
-Base URL: `http://<host>:<port>/api/v1`. Implementation: `api/src/workerApi.js`.
+Base URL: `/api/v1`. Implementation: `api/src/workerApi.js`. Two HTTP
+routes total — token issuance is not one of them.
 
-## 1. Get a worker token (once, per device)
+## Get a token (once, per device)
 
-There is **no HTTP route for this** — a worker token grants full
-pull-and-complete access to every customer's queue, so it's issued from
-inside the running container, not over the network:
+No HTTP route. Run inside the container:
 
 ```bash
 docker compose exec api node scripts/create-worker-token.js "worker-livingroom"
 ```
 
-(or `docker exec <container-id> node scripts/create-worker-token.js "worker-livingroom"`
-if not using compose). Output:
+Prints the token once — store it on the device, send as
+`Authorization: Bearer <token>` on every request below.
 
-```
-Worker token created (id 1) for "worker-livingroom". Store it now, it will not be shown again:
-
-wk_9f2c...redacted
-```
-
-The token is shown **once** — store it on the device (e.g. in a local
-config file or env var) and use it as a bearer token on every request
-below. See `api/scripts/create-worker-token.js`.
-
-## 2. GET the next message — `POST /worker/sms/pull`
-
-Despite being a `POST` (it has a side effect: it claims the row), this is
-the "get work" call — poll it in a loop.
+## `POST /worker/sms/pull` — claim work
 
 ```
 POST /api/v1/worker/sms/pull
-Authorization: Bearer wk_9f2c...redacted
-```
-
-- **`200`** — a message was claimed. It is now yours; no other worker can
-  receive it.
-
-  ```json
-  { "id": 123, "to": "+15551234567", "message": "Hello world", "status": 2 }
-  ```
-
-- **`204`** — queue is empty, nothing to claim right now. Response body is
-  empty. Back off and poll again (e.g. every 5s).
-- **`401`** — missing/invalid/revoked token.
-
-This claim is atomic across every worker hitting the API at once — two
-devices polling at the same instant can never receive the same message
-(`SELECT ... FOR UPDATE SKIP LOCKED` + a conditional `UPDATE`, see
-`workerApi.js`).
-
-## 3. POST the result — `PATCH /worker/sms/:id/status`
-
-Once you've actually sent the message (modem/GSM call, whatever the device
-does), report it back:
-
-```
-PATCH /api/v1/worker/sms/123/status
-Authorization: Bearer wk_9f2c...redacted
+Authorization: Bearer wk_...
 Content-Type: application/json
 
+{ "count": 5 }
+```
+
+- `count` — optional, integer `1`–`100`, default `1`. Must be a strict
+  integer: `2.5`, `"3"`, `0`, negative, or `>100` all → `400`.
+
+`200` always, body is an array (possibly `[]` if the queue is empty):
+
+```json
+[
+  { "id": 123, "to": "+15551234567", "message": "Hello world", "status": 2 }
+]
+```
+
+Claim is atomic across every worker polling at once — concurrent requests
+never receive overlapping rows (`SELECT ... FOR UPDATE SKIP LOCKED` +
+a batch `UPDATE` scoped to exactly the locked ids, one transaction).
+`401` on missing/invalid/revoked token.
+
+## `PATCH /worker/sms/:id/status` — report outcome
+
+Only from a message *you* claimed via pull (row must be `status=2`).
+
+**Sent:**
+```json
 { "status": 1 }
 ```
+`200` `{ "id": 123, "status": 1 }`. Sets `processed_at`. Terminal.
 
-`status` must be exactly `1` — this is the only transition this route
-allows, and only from a message you (or another worker) previously
-claimed with step 2.
+**Failed — re-queues for another pull:**
+```json
+{ "status": 0, "error_message": "modem timeout" }
+```
+`error_message` is required with `status: 0`. `200` `{ "id": 123, "status": 0 }`.
+Row goes back to `status=0`; next pull (by any worker) claims it again,
+incrementing `attempts`. `error_message` persists even if that retry later
+succeeds — it's a last-failure record, not cleared on success.
 
-- **`200`** — `{ "id": 123, "status": 1 }`. Done, move on to the next pull.
-- **`400`** — body wasn't `{"status": 1}`.
-- **`404`** — no SMS with that id.
-- **`409`** — that id exists but isn't currently claimed (already
-  completed, or was never pulled). Don't retry this id.
-- **`401`** — missing/invalid/revoked token.
+Other responses: `400` (bad body), `404` (no such id), `409` (id exists
+but isn't currently `status=2` — already done, never claimed, or claimed
+by a report that already resolved it).
 
-There is currently **no "mark failed" call**. If sending fails on your
-end, the message stays stuck at `status = 2` — don't call this route for
-it. That's a deliberate gap (see `api.md` → Failure handling), not
-something to work around client-side.
+No automatic timeout/requeue exists — a worker that crashes after pulling
+without ever calling this route leaves the message stuck at `status=2`
+indefinitely. Reporting failure explicitly is the only way back to `status=0`.
 
-## Minimal loop
+## Loop
 
 ```text
-token = load_saved_token()  # from step 1, done once ahead of time
+token = load_saved_token()
 
 loop forever:
-  res = POST /worker/sms/pull   (Authorization: Bearer token)
+  batch = POST /worker/sms/pull  { "count": 5 }
+  if batch is empty:
+    sleep(5); continue
 
-  if res.status == 204:
-    sleep(5)
-    continue
-
-  sms = res.json()
-  ok = send_sms(sms.to, sms.message)   # actual modem/GSM send
-
-  if ok:
-    PATCH /worker/sms/{sms.id}/status   { "status": 1 }
-  else:
-    log_and_alert(sms.id)   # left at status=2, see above
+  for sms in batch:
+    if send_sms(sms.to, sms.message):           # actual modem/GSM send
+      PATCH /worker/sms/{sms.id}/status  { "status": 1 }
+    else:
+      PATCH /worker/sms/{sms.id}/status  { "status": 0, "error_message": "..." }
 ```
 
-No rate limit applies to either of these two routes.
+No rate limit on either route.

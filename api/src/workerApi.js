@@ -29,41 +29,51 @@ async function workerAuth(req, res, next) {
 
 router.use("/worker", workerAuth);
 
-// Atomically claims the oldest queued SMS: status 0 -> 2.
-// SELECT ... FOR UPDATE SKIP LOCKED lets concurrent workers each grab a
-// different row without blocking on rows another worker already has
-// locked; the WHERE status = 0 on the UPDATE guards against a race where
-// the row changed between the SELECT and the UPDATE.
+const MAX_PULL_BATCH_SIZE = 100;
+
+// Atomically claims up to `count` oldest queued SMS: status 0 -> 2 each.
+// SELECT ... FOR UPDATE SKIP LOCKED lets concurrent workers each grab
+// different rows without blocking on rows another worker already has
+// locked; the batch UPDATE is scoped to exactly those locked ids, so a
+// row already claimed by another worker between SELECT and UPDATE can't
+// be double-counted.
 router.post("/worker/sms/pull", wrap(async (req, res) => {
+  const { count } = req.body || {};
+  const batchSize = count === undefined ? 1 : count;
+  if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > MAX_PULL_BATCH_SIZE) {
+    return res.status(400).json({
+      error: `'count' must be an integer between 1 and ${MAX_PULL_BATCH_SIZE}`,
+    });
+  }
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
     const [candidates] = await conn.query(
-      `SELECT id FROM sms_queue WHERE status = 0 ORDER BY created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED`
+      `SELECT id FROM sms_queue WHERE status = 0 ORDER BY created_at ASC LIMIT ? FOR UPDATE SKIP LOCKED`,
+      [batchSize]
     );
     if (candidates.length === 0) {
       await conn.commit();
-      return res.status(204).end();
+      return res.status(200).json([]);
     }
 
-    const id = candidates[0].id;
-    const [updateResult] = await conn.query(
-      `UPDATE sms_queue SET status = 2, pulled_at = NOW(), attempts = attempts + 1
-       WHERE id = ? AND status = 0`,
-      [id]
+    const ids = candidates.map((row) => row.id);
+    await conn.query(
+      `UPDATE sms_queue SET status = 2, pulled_at = NOW(), attempts = attempts + 1 WHERE id IN (?)`,
+      [ids]
     );
-    if (updateResult.affectedRows === 0) {
-      // Lost the race to another worker between SELECT and UPDATE.
-      await conn.commit();
-      return res.status(204).end();
-    }
 
-    const [rows] = await conn.query(`SELECT * FROM sms_queue WHERE id = ?`, [id]);
+    const [rows] = await conn.query(
+      `SELECT * FROM sms_queue WHERE id IN (?) ORDER BY created_at ASC`,
+      [ids]
+    );
     await conn.commit();
 
-    const sms = rows[0];
-    res.status(200).json({ id: sms.id, to: sms.to_number, message: sms.message, status: sms.status });
+    res.status(200).json(
+      rows.map((sms) => ({ id: sms.id, to: sms.to_number, message: sms.message, status: sms.status }))
+    );
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -72,16 +82,25 @@ router.post("/worker/sms/pull", wrap(async (req, res) => {
   }
 }));
 
-// Marks a claimed SMS as sent: status 2 -> 1. No other transition allowed.
+// Reports the outcome of a previously-claimed (status=2) SMS.
+//   { "status": 1 }                          -> 2 -> 1, sets processed_at (done)
+//   { "status": 0, "error_message": "..." }   -> 2 -> 0, sets error_message,
+//                                                 re-queued for another pull
+//                                                 (attempts increments again
+//                                                 on that next pull)
+// No other status value or transition is allowed.
 router.patch("/worker/sms/:id/status", wrap(async (req, res) => {
   const id = Number(req.params.id);
-  const { status } = req.body || {};
+  const { status, error_message: errorMessage } = req.body || {};
 
   if (!Number.isInteger(id) || id <= 0) {
     return res.status(400).json({ error: "Invalid SMS id" });
   }
-  if (status !== 1) {
-    return res.status(400).json({ error: "Only the 2 -> 1 (processed) transition is allowed" });
+  if (status !== 1 && status !== 0) {
+    return res.status(400).json({ error: "'status' must be 1 (sent) or 0 (failed, re-queue)" });
+  }
+  if (status === 0 && (typeof errorMessage !== "string" || errorMessage.trim() === "")) {
+    return res.status(400).json({ error: "'error_message' is required when status is 0" });
   }
 
   const [existingRows] = await pool.query(`SELECT status FROM sms_queue WHERE id = ?`, [id]);
@@ -89,17 +108,24 @@ router.patch("/worker/sms/:id/status", wrap(async (req, res) => {
     return res.status(404).json({ error: "SMS not found" });
   }
 
-  const [updateResult] = await pool.query(
-    `UPDATE sms_queue SET status = 1, processed_at = NOW() WHERE id = ? AND status = 2`,
-    [id]
-  );
+  const [updateResult] =
+    status === 1
+      ? await pool.query(
+          `UPDATE sms_queue SET status = 1, processed_at = NOW() WHERE id = ? AND status = 2`,
+          [id]
+        )
+      : await pool.query(
+          `UPDATE sms_queue SET status = 0, error_message = ? WHERE id = ? AND status = 2`,
+          [errorMessage, id]
+        );
+
   if (updateResult.affectedRows === 0) {
     return res.status(409).json({
       error: `SMS ${id} is not in a claimed (status=2) state; current status is ${existingRows[0].status}`,
     });
   }
 
-  res.status(200).json({ id, status: 1 });
+  res.status(200).json({ id, status });
 }));
 
 module.exports = router;

@@ -1,163 +1,83 @@
 # SMS Processing API
 
-Base URL: `http://<host>:<port>/api/v1`
+Base URL: `/api/v1`. Implementation: `api/src/userApi.js`, `api/src/workerApi.js`.
 
-Two completely separate credential spaces:
+## Auth
 
-| Audience | Header | Table | Can do |
-|---|---|---|---|
-| Customer (website/API) | `X-Api-Key: <key>` | `api_keys` | Submit SMS |
-| Worker (the device sending SMS) | `Authorization: Bearer <token>` | `worker_tokens` | Pull + complete SMS |
+| Audience | Header | Table |
+|---|---|---|
+| Customer | `X-Api-Key: <key>` | `api_keys` |
+| Worker | `Authorization: Bearer <token>` | `worker_tokens` |
 
-A customer API key is rejected by every `/worker/*` route and vice versa —
-they're validated against different tables, not just different scopes on
-the same table.
+Separate tables — one credential type never authenticates the other's routes.
 
-## Customer: submit an SMS
+## `POST /users/token`
 
-```
-POST /api/v1/sms
-X-Api-Key: <customer api key>
-Content-Type: application/json
+Open, no auth, no rate limit. Body: `{ email, phone, label? }`.
 
-{
-  "to": "+15551234567",
-  "message": "Hello world"
-}
-```
+- `email` — required, validated (HTML5-spec pattern).
+- `phone` — required, international format (`+` + country code). Validated
+  with `libphonenumber-js`, normalized to E.164, `country` (ISO 3166-1
+  alpha-2) derived from it.
+- Existing email → updates `phone_number`/`country` on that user, doesn't duplicate.
 
-Response `201`:
+`201`: `{ id, userId, email, phone, country, label, apiKey }` (`apiKey` shown once).
 
-```json
-{ "id": 123, "to": "+15551234567", "message": "Hello world", "status": 0 }
-```
+## `POST /sms`
 
-Row is inserted with `status = 0` (queued).
+Auth: customer. Body: `{ to, message }`. `to` validated/normalized like `phone` above.
 
-## Worker: pull the next SMS
+Rate limit: `api_keys.daily_sms_limit` (default `10`) per rolling 24h,
+counted from `sms_queue` directly — see Rate limiting below. `429` if exceeded.
 
-```
-POST /api/v1/worker/sms/pull
-Authorization: Bearer <worker token>
-```
+`201`: `{ id, to, message, status: 0 }`
 
-Atomically claims the single oldest `status = 0` row and flips it to
-`status = 2`, setting `pulled_at` and incrementing `attempts`. Implemented
-as `SELECT ... FOR UPDATE SKIP LOCKED` + conditional `UPDATE` inside one
-transaction (see `api/src/workerApi.js`), so two workers polling at the
-same instant can never receive the same row.
+## `POST /worker/sms/pull`
 
-- **200** — a message was claimed:
+Auth: worker. Body: `{ count? }` — integer, `1`–`100`, default `1`.
+Non-integers (`2.5`, `"3"`, negative, `0`, `>100`) → `400`.
 
-  ```json
-  { "id": 123, "to": "+15551234567", "message": "Hello world", "status": 2 }
-  ```
+Atomically claims up to `count` oldest `status=0` rows (`0 -> 2`). Always
+`200` with a JSON array (possibly empty) of `{ id, to, message, status }`.
+Full detail incl. concurrency guarantee: [`worker-api.md`](./worker-api.md).
 
-- **204** — queue is empty, nothing to claim. Poll again later (recommend a
-  few seconds of backoff between empty polls).
+## `PATCH /worker/sms/:id/status`
 
-## Worker: report an SMS as sent
+Auth: worker. Requires the row currently be `status=2`.
 
-```
-PATCH /api/v1/worker/sms/:id/status
-Authorization: Bearer <worker token>
-Content-Type: application/json
+- `{ "status": 1 }` → `2 -> 1`, done.
+- `{ "status": 0, "error_message": "..." }` → `2 -> 0`, re-queued.
 
-{ "status": 1 }
-```
+`200` / `400` (bad body) / `404` (no such id) / `409` (not currently claimed).
 
-Only the `2 -> 1` transition is accepted. The server re-checks the row is
-currently `status = 2` as part of the same `UPDATE`, so this is also race-safe.
+## `sms_queue` field triggers
 
-- **200** — `{ "id": 123, "status": 1 }`
-- **400** — body isn't exactly `{"status": 1}`
-- **404** — no SMS with that id
-- **409** — SMS exists but isn't currently claimed (already processed, never
-  pulled, or id is otherwise not in `status = 2`)
-
-## Suggested worker loop
-
-```text
-loop forever:
-  res = POST /worker/sms/pull
-  if res.status == 204:
-    sleep(POLL_INTERVAL_SECONDS)   # e.g. 5s
-    continue
-  sms = res.json()
-  try:
-    send_sms(sms.to, sms.message)   # actual GSM/modem send
-    PATCH /worker/sms/{sms.id}/status  { "status": 1 }
-  except:
-    # message stays at status=2; see "Failure handling" below
-    log_and_alert(sms.id)
-```
-
-## Failure handling (not built yet)
-
-The spec only defines the two normal transitions (`0->2`, `2->1`). If a
-send fails, the current schema/API intentionally does **not** auto-revert
-`2 -> 0` or expose a "mark failed" endpoint — a message stuck at `status =
-2` is left for manual/operational follow-up (the `attempts` and
-`error_message` columns exist on `sms_queue` for this, unused by the API
-today). Add a retry/failure endpoint later if needed; don't build it
-speculatively now.
+| Field | Set when |
+|---|---|
+| `pulled_at` | every pull, including re-pulls after a reported failure |
+| `attempts` | `+1` on every pull — a message failed and re-pulled N times has `attempts = N` |
+| `error_message` | set by a `status:0` report; **not** cleared by a later success — it's last-failure history |
+| `processed_at` | only on `status:1` (final) |
 
 ## Rate limiting
 
-`/sms` enforces a per-API-key daily submission limit, read from
-`api_keys.daily_sms_limit` (default `10`, set on the row - not a constant
-in code). Enforced by comparing that value against `COUNT(*) FROM sms_queue
-WHERE api_key_id = ? AND created_at >= NOW() - INTERVAL 1 DAY` (backed by
-`idx_sms_queue_api_key_created`) in `api/src/userApi.js`. No separate
-rate-limit table, no IP dimension anywhere. Exceeding it returns `429`.
+Only `/sms` is limited, by `api_keys.daily_sms_limit` — read fresh per
+request, not a code constant. Change it live:
 
-To change a key's limit: `UPDATE api_keys SET daily_sms_limit = ? WHERE id
-= ?` — takes effect immediately, no restart.
-
-`/worker/*` and `/users/token` are **not** rate limited.
-
-## Provisioning credentials
-
-**Customer API keys** are self-service, no auth required, no rate limit —
-`POST /users/token` (below). Anyone who can reach the API can mint one, as
-often as they want. This is intentional per current requirements, not an
-oversight: there is no signup/account system, so this is the only entry
-point that creates `users` / `api_keys` rows.
-
-**Worker tokens are different**: there is no HTTP route for creating one.
-A worker token grants full pull-and-complete access to *every* customer's
-queued SMS, so unlike API keys it's issued by running a script inside the
-container (`docker compose exec api node scripts/create-worker-token.js
-"<name>"`) — see [`worker-api.md`](./worker-api.md). This means only
-whoever has shell/exec access to the deployment can create one.
-
-### Customer: get an API key
-
-```
-POST /api/v1/users/token
-Content-Type: application/json
-
-{ "email": "customer@example.com", "phone": "+15551234567", "label": "prod key" }
+```sql
+UPDATE api_keys SET daily_sms_limit = ? WHERE id = ?;
 ```
 
-`201` — `{ "id": 1, "userId": 1, "email": "...", "phone": "+15551234567", "country": "US", "label": "...", "apiKey": "ak_..." }`
-(`label` is optional; `email` and `phone` are required).
+Nothing else (`/worker/*`, `/users/token`) is rate limited.
 
-- `email` is validated against the HTML5-spec pattern, not just "contains
-  an @".
-- `phone` must be a real, valid number in international format (leading
-  `+` and country code, e.g. `+15551234567`) - validated with
-  `libphonenumber-js`, not a regex. It's normalized to E.164 before
-  storage, and `country` (ISO 3166-1 alpha-2, e.g. `US`, `GB`) is derived
-  from it and stored alongside. Invalid or ambiguous (no country code)
-  numbers are rejected with `400`.
-- `POST /sms`'s `to` field is validated and normalized the same way before
-  the `sms_queue` row is inserted.
+## Credentials
 
-Creates the `users` row if the email hasn't been seen before, otherwise
-updates `phone_number`/`country` on the existing row. Also available via
-the "Get API key" page in `/frontend`.
+| Type | How | Auth |
+|---|---|---|
+| API key | `POST /users/token` | none — self-service |
+| Worker token | `docker compose exec api node scripts/create-worker-token.js "<name>"` | requires container exec access, not HTTP |
 
-The plaintext credential is shown once (either in the HTTP response for
-API keys, or in the script's stdout for worker tokens); only its SHA-256
-hash is stored (`api_keys.key_hash` / `worker_tokens.token_hash`).
+Worker tokens grant full pull/complete access to every customer's queue,
+so unlike API keys there's no HTTP route for creating one. Both credential
+types are shown once; only their SHA-256 hash is stored
+(`api_keys.key_hash` / `worker_tokens.token_hash`).
