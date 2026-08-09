@@ -23,32 +23,51 @@ Open, no auth, no rate limit. Body: `{ email, phone, label? }`.
 
 `201`: `{ id, userId, email, phone, country, label, apiKey }` (`apiKey` shown once).
 
+## `GET /numbers`
+
+Auth: customer. Lists `worker_tokens.phone_number` where `is_public = 1
+AND revoked_at IS NULL` — the numbers a customer may use as `from` below.
+Private workers (created without `--public`) never appear here.
+
+`200`: `["+15551234567", ...]`
+
 ## `POST /sms`
 
-Auth: customer. Body: `{ to, message }`. `to` validated/normalized like `phone` above.
+Auth: customer. Body: `{ to, from, message }`.
+
+- `to` / `from` — both validated/normalized like `phone` in `/users/token`.
+- `from` must match a **public**, active worker number (same set as `GET
+  /numbers`) — otherwise `400`. That worker becomes the *only* one that
+  can ever pull or complete this message (see `/worker/sms/pull` below).
 
 Rate limit: `api_keys.daily_sms_limit` (default `10`) per rolling 24h,
 counted from `sms_queue` directly — see Rate limiting below. `429` if exceeded.
 
-`201`: `{ id, to, message, status: 0 }`
+`201`: `{ id, to, from, message, status: 0 }`
 
 ## `POST /worker/sms/pull`
 
 Auth: worker. Body: `{ count? }` — integer, `1`–`100`, default `1`.
 Non-integers (`2.5`, `"3"`, negative, `0`, `>100`) → `400`.
 
-Atomically claims up to `count` oldest `status=0` rows (`0 -> 2`). Always
-`200` with a JSON array (possibly empty) of `{ id, to, message, status }`.
-Full detail incl. concurrency guarantee: [`worker-api.md`](./worker-api.md).
+Atomically claims up to `count` oldest `status=0` rows **submitted against
+this worker's own number** (`WHERE worker_token_id = <caller's id>`) —
+a worker never sees messages sent `from` a different number, public or
+not. `0 -> 2` on each claim. Always `200` with a JSON array (possibly
+empty) of `{ id, to, message, status }`. Full detail incl. concurrency
+guarantee: [`worker-api.md`](./worker-api.md).
 
 ## `PATCH /worker/sms/:id/status`
 
-Auth: worker. Requires the row currently be `status=2`.
+Auth: worker. Requires the row currently be `status=2` **and** belong to
+the calling worker's own number — `403` if it was submitted `from` a
+different worker's number, even with an otherwise-valid worker token.
 
 - `{ "status": 1 }` → `2 -> 1`, done.
 - `{ "status": 0, "error_message": "..." }` → `2 -> 0`, re-queued.
 
-`200` / `400` (bad body) / `404` (no such id) / `409` (not currently claimed).
+`200` / `400` (bad body) / `403` (not your number) / `404` (no such id) /
+`409` (not currently claimed).
 
 ## `sms_queue` field triggers
 
@@ -68,16 +87,18 @@ request, not a code constant. Change it live:
 UPDATE api_keys SET daily_sms_limit = ? WHERE id = ?;
 ```
 
-Nothing else (`/worker/*`, `/users/token`) is rate limited.
+Nothing else (`/worker/*`, `/users/token`, `/numbers`) is rate limited.
 
 ## Credentials
 
 | Type | How | Auth |
 |---|---|---|
 | API key | `POST /users/token` | none — self-service |
-| Worker token | `docker compose exec api node scripts/create-worker-token.js "<name>"` | requires container exec access, not HTTP |
+| Worker token | `docker compose exec api node scripts/create-worker-token.js "<name>" "<phone>" [--public]` | requires container exec access, not HTTP |
 
 Worker tokens grant full pull/complete access to every customer's queue,
-so unlike API keys there's no HTTP route for creating one. Both credential
-types are shown once; only their SHA-256 hash is stored
-(`api_keys.key_hash` / `worker_tokens.token_hash`).
+so unlike API keys there's no HTTP route for creating one — see
+[`worker-api.md`](./worker-api.md) for the script's full usage
+(`--public`/`-p`, `-h`/`--help`). Both credential types are shown once;
+only their SHA-256 hash is stored (`api_keys.key_hash` /
+`worker_tokens.token_hash`).

@@ -78,21 +78,51 @@ router.post("/users/token", wrap(async (req, res) => {
   });
 }));
 
+// Lists the numbers available to send from, so a customer can pick one
+// for 'from' below. Requires a valid API key but isn't otherwise scoped -
+// every PUBLIC worker number is available to every customer. Numbers
+// created without --public (the default) never appear here.
+router.get("/numbers", customerAuth, wrap(async (req, res) => {
+  const [rows] = await pool.query(
+    `SELECT phone_number FROM worker_tokens
+     WHERE is_public = 1 AND revoked_at IS NULL ORDER BY phone_number ASC`
+  );
+  res.status(200).json(rows.map((r) => r.phone_number));
+}));
+
 // Customer entry point into the queue. status starts at 0 (queued).
-// Limited to this key's api_keys.daily_sms_limit submissions per rolling
-// 24h, computed straight from sms_queue - no separate rate-limit table
-// (see idx_sms_queue_api_key_created in the schema).
+// 'from' must match an active, PUBLIC worker_tokens.phone_number (same
+// visibility rule as GET /numbers) - that worker becomes the only one
+// that can ever pull/complete this row (see workerApi.js). Limited to
+// this key's api_keys.daily_sms_limit submissions per rolling 24h,
+// computed straight from sms_queue - no separate rate-limit table (see
+// idx_sms_queue_api_key_created).
 router.post("/sms", customerAuth, wrap(async (req, res) => {
-  const { to, message } = req.body || {};
+  const { to, from, message } = req.body || {};
   const parsedTo = parsePhone(to);
   if (!parsedTo) {
     return res.status(400).json({
       error: "'to' must be a valid phone number in international format, e.g. +15551234567",
     });
   }
+  const parsedFrom = parsePhone(from);
+  if (!parsedFrom) {
+    return res.status(400).json({
+      error: "'from' must be a valid phone number in international format, e.g. +15551234567",
+    });
+  }
   if (typeof message !== "string" || message.trim() === "") {
     return res.status(400).json({ error: "'message' is required" });
   }
+
+  const [workerRows] = await pool.query(
+    `SELECT id FROM worker_tokens WHERE phone_number = ? AND is_public = 1 AND revoked_at IS NULL LIMIT 1`,
+    [parsedFrom.e164]
+  );
+  if (workerRows.length === 0) {
+    return res.status(400).json({ error: "'from' is not a recognized sending number - see GET /numbers" });
+  }
+  const workerTokenId = workerRows[0].id;
 
   const [[{ count }]] = await pool.query(
     `SELECT COUNT(*) AS count FROM sms_queue
@@ -106,12 +136,18 @@ router.post("/sms", customerAuth, wrap(async (req, res) => {
   }
 
   const [result] = await pool.query(
-    `INSERT INTO sms_queue (user_id, api_key_id, to_number, message, status)
-     VALUES (?, ?, ?, ?, 0)`,
-    [req.auth.userId, req.auth.apiKeyId, parsedTo.e164, message]
+    `INSERT INTO sms_queue (user_id, api_key_id, worker_token_id, to_number, message, status)
+     VALUES (?, ?, ?, ?, ?, 0)`,
+    [req.auth.userId, req.auth.apiKeyId, workerTokenId, parsedTo.e164, message]
   );
 
-  res.status(201).json({ id: result.insertId, to: parsedTo.e164, message, status: 0 });
+  res.status(201).json({
+    id: result.insertId,
+    to: parsedTo.e164,
+    from: parsedFrom.e164,
+    message,
+    status: 0,
+  });
 }));
 
 module.exports = router;

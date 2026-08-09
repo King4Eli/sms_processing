@@ -31,7 +31,10 @@ router.use("/worker", workerAuth);
 
 const MAX_PULL_BATCH_SIZE = 100;
 
-// Atomically claims up to `count` oldest queued SMS: status 0 -> 2 each.
+// Atomically claims up to `count` oldest queued SMS submitted against
+// THIS worker's own number: status 0 -> 2 each. A worker can never see or
+// claim an SMS that was submitted with a different 'from' number - that's
+// enforced by the WHERE worker_token_id = ? below, not just convention.
 // SELECT ... FOR UPDATE SKIP LOCKED lets concurrent workers each grab
 // different rows without blocking on rows another worker already has
 // locked; the batch UPDATE is scoped to exactly those locked ids, so a
@@ -51,8 +54,9 @@ router.post("/worker/sms/pull", wrap(async (req, res) => {
     await conn.beginTransaction();
 
     const [candidates] = await conn.query(
-      `SELECT id FROM sms_queue WHERE status = 0 ORDER BY created_at ASC LIMIT ? FOR UPDATE SKIP LOCKED`,
-      [batchSize]
+      `SELECT id FROM sms_queue WHERE worker_token_id = ? AND status = 0
+       ORDER BY created_at ASC LIMIT ? FOR UPDATE SKIP LOCKED`,
+      [req.worker.workerTokenId, batchSize]
     );
     if (candidates.length === 0) {
       await conn.commit();
@@ -82,7 +86,11 @@ router.post("/worker/sms/pull", wrap(async (req, res) => {
   }
 }));
 
-// Reports the outcome of a previously-claimed (status=2) SMS.
+// Reports the outcome of a previously-claimed (status=2) SMS. Only the
+// worker whose number it was submitted against can report on it - same
+// scoping as pull, checked explicitly below (not just implied by pull
+// having been scoped, since a different valid worker token could
+// otherwise guess/enumerate ids).
 //   { "status": 1 }                          -> 2 -> 1, sets processed_at (done)
 //   { "status": 0, "error_message": "..." }   -> 2 -> 0, sets error_message,
 //                                                 re-queued for another pull
@@ -103,9 +111,15 @@ router.patch("/worker/sms/:id/status", wrap(async (req, res) => {
     return res.status(400).json({ error: "'error_message' is required when status is 0" });
   }
 
-  const [existingRows] = await pool.query(`SELECT status FROM sms_queue WHERE id = ?`, [id]);
+  const [existingRows] = await pool.query(
+    `SELECT status, worker_token_id FROM sms_queue WHERE id = ?`,
+    [id]
+  );
   if (existingRows.length === 0) {
     return res.status(404).json({ error: "SMS not found" });
+  }
+  if (existingRows[0].worker_token_id !== req.worker.workerTokenId) {
+    return res.status(403).json({ error: "This SMS was not submitted against your worker number" });
   }
 
   const [updateResult] =

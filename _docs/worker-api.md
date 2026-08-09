@@ -8,11 +8,30 @@ routes total — token issuance is not one of them.
 No HTTP route. Run inside the container:
 
 ```bash
-docker compose exec api node scripts/create-worker-token.js "worker-livingroom"
+docker compose exec api node scripts/create-worker-token.js "worker-livingroom" "+15551234567" [--public]
+node scripts/create-worker-token.js -h   # full usage
 ```
+
+- `name` — any string identifying this worker.
+- `phone` — the "from" number this worker sends as. Required, strictly
+  validated (`libphonenumber-js`, real+valid, international format) and
+  normalized to E.164 **before insert** — an invalid number is rejected
+  and nothing is written. Unique across all worker tokens.
+- `--public` / `-p` — makes this number visible to customers via `GET
+  /numbers` and selectable as `from` in `POST /sms`. **Default: private**
+  — omit it and customers can neither see nor use this number.
 
 Prints the token once — store it on the device, send as
 `Authorization: Bearer <token>` on every request below.
+
+## Pull is scoped to your own number
+
+A worker only ever sees SMS that were submitted with `from` equal to
+*its own* `phone_number` — public or private doesn't matter here, only
+who the message was addressed from. Two workers, public or private, never
+receive each other's messages, and `PATCH .../status` on someone else's
+message returns `403` even with a fully valid worker token. See `POST
+/sms` in [`api.md`](./api.md) for how `from` gets resolved at submission.
 
 ## `POST /worker/sms/pull` — claim work
 
@@ -55,13 +74,15 @@ Only from a message *you* claimed via pull (row must be `status=2`).
 { "status": 0, "error_message": "modem timeout" }
 ```
 `error_message` is required with `status: 0`. `200` `{ "id": 123, "status": 0 }`.
-Row goes back to `status=0`; next pull (by any worker) claims it again,
-incrementing `attempts`. `error_message` persists even if that retry later
-succeeds — it's a last-failure record, not cleared on success.
+Row goes back to `status=0`; only the same worker (same `phone_number`)
+can pull it again, incrementing `attempts`. `error_message` persists even
+if that retry later succeeds — it's a last-failure record, not cleared on
+success.
 
-Other responses: `400` (bad body), `404` (no such id), `409` (id exists
-but isn't currently `status=2` — already done, never claimed, or claimed
-by a report that already resolved it).
+Other responses: `400` (bad body), `403` (this id was submitted `from` a
+different worker's number — not yours to update even if you know the id),
+`404` (no such id), `409` (id exists but isn't currently `status=2` —
+already done, never claimed, or claimed by a report that already resolved it).
 
 No automatic timeout/requeue exists — a worker that crashes after pulling
 without ever calling this route leaves the message stuck at `status=2`

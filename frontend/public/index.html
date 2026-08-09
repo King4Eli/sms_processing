@@ -10,7 +10,7 @@
     nav a { text-decoration: none; color: #555; }
     nav a.active { color: #111; font-weight: 600; }
     label { display: block; margin-top: 1rem; font-weight: 600; }
-    input, textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; margin-top: 0.25rem; font: inherit; }
+    input, textarea, select { width: 100%; box-sizing: border-box; padding: 0.5rem; margin-top: 0.25rem; font: inherit; }
     button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font: inherit; cursor: pointer; }
     #result { margin-top: 1.5rem; padding: 0.75rem; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; }
     #result.ok { background: #e6f4ea; color: #1e4620; }
@@ -28,6 +28,11 @@
     <label for="api-key">API key</label>
     <input id="api-key" type="password" autocomplete="off" required />
 
+    <label for="from">From</label>
+    <select id="from" required>
+      <option value="">Enter API key above to load numbers</option>
+    </select>
+
     <label for="to">To</label>
     <input id="to" type="tel" placeholder="+15551234567" required />
 
@@ -41,10 +46,35 @@
   <script>
     const form = document.getElementById("sms-form");
     const result = document.getElementById("result");
+    const apiKeyInput = document.getElementById("api-key");
+    const fromSelect = document.getElementById("from");
+
+    async function loadNumbers() {
+      const apiKey = apiKeyInput.value;
+      if (!apiKey) return;
+
+      fromSelect.innerHTML = '<option value="">Loading...</option>';
+      try {
+        const res = await fetch("/api/v1/numbers", { headers: { "X-Api-Key": apiKey } });
+        if (!res.ok) {
+          fromSelect.innerHTML = '<option value="">Invalid API key</option>';
+          return;
+        }
+        const numbers = await res.json();
+        fromSelect.innerHTML = numbers.length
+          ? numbers.map((n) => `<option value="${n}">${n}</option>`).join("")
+          : '<option value="">No numbers available</option>';
+      } catch (err) {
+        fromSelect.innerHTML = '<option value="">Failed to load numbers</option>';
+      }
+    }
+
+    apiKeyInput.addEventListener("blur", loadNumbers);
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const apiKey = document.getElementById("api-key").value;
+      const apiKey = apiKeyInput.value;
+      const from = fromSelect.value;
       const to = document.getElementById("to").value;
       const message = document.getElementById("message").value;
 
@@ -56,7 +86,7 @@
             "Content-Type": "application/json",
             "X-Api-Key": apiKey,
           },
-          body: JSON.stringify({ to, message }),
+          body: JSON.stringify({ to, from, message }),
         });
         const body = await res.json();
 
