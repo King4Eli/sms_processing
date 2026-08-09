@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS sms_queue (
   worker_token_id BIGINT UNSIGNED NOT NULL, -- the "from" number picked at submission; pull is scoped to this worker only
   to_number VARCHAR(32) NOT NULL,
   message TEXT NOT NULL,
-  status TINYINT UNSIGNED NOT NULL DEFAULT 0, -- 0=queued, 1=processed, 2=pulled
+  status TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0=queued, 1=processed, 2=pulled',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   pulled_at TIMESTAMP NULL,
   processed_at TIMESTAMP NULL,
@@ -84,3 +84,8 @@ ALTER TABLE sms_queue ADD CONSTRAINT fk_sms_queue_worker_token FOREIGN KEY (work
 -- Supports POST /worker/sms/pull's WHERE worker_token_id = ? AND status = 0
 -- ORDER BY created_at query.
 ALTER TABLE sms_queue ADD INDEX idx_sms_queue_worker_status_created (worker_token_id, status, created_at);
+
+-- Applies the status COMMENT to installs from before it was added (this
+-- statement is idempotent - always succeeds, unlike ADD COLUMN/ADD INDEX).
+ALTER TABLE sms_queue MODIFY COLUMN status TINYINT UNSIGNED NOT NULL DEFAULT 0
+  COMMENT '0=queued, 1=processed, 2=pulled';
