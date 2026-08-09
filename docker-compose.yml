@@ -3,12 +3,14 @@
 # not the ./.env that Compose auto-loads — and ./.env here is a directory
 # anyway, which Compose silently ignores for auto-loading.)
 #
-# First run / after schema changes, apply migrations:
-#   docker compose run --rm api npm run migrate
+# Schema is applied automatically on api startup from _docs/schema.sql -
+# no separate migrate step.
 
-services: 
+services:
   api:
-    build: ./api
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     env_file:
       - ./.env/db.env
