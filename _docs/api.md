@@ -104,19 +104,15 @@ speculatively now.
 
 ## Rate limiting
 
-`/sms` and `/worker/*` are rate limited per credential (`api_keys.id` /
-`worker_tokens.id`), not per IP — see `rate_limit_hits` in the schema and
-`api/src/services/rateLimitService.js`. A row is inserted per allowed
-request and pruned once it's outside the window, so the limit is enforced
-against the database rather than in-process memory (correct across
-multiple API instances, unlike an in-memory limiter). Defaults:
+`/sms` enforces a limit of **10 submissions per API key per rolling 24h**,
+computed directly from `sms_queue` (`COUNT(*) WHERE api_key_id = ? AND
+created_at >= NOW() - INTERVAL 1 DAY`, backed by
+`idx_sms_queue_api_key_created`) — no separate rate-limit table, and no IP
+dimension anywhere. See `api/src/middleware/rateLimit.js` and
+`smsQueueService.countByApiKeyLast24h`. Exceeding it returns `429`.
 
-- Customer `/sms`: 60 requests / 60s per API key
-- Worker `/worker/*`: 120 requests / 60s per worker token (generous
-  headroom for continuous polling)
-
-`/users/token` and `/raspberrypi/token` are **not** rate limited — see
-below, this is intentional.
+`/worker/*`, `/users/token`, and `/raspberrypi/token` are **not** rate
+limited.
 
 ## Provisioning credentials
 

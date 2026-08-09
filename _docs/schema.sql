@@ -1,7 +1,6 @@
--- SMS Processing queue schema (documentation copy).
--- Source of truth / what actually runs: api/src/migrations/*.sql
--- (applied via `npm run migrate` inside /api). Keep this file in sync if
--- the migrations change.
+-- SMS Processing schema. This is the ONLY copy - the API reads and
+-- executes this exact file on startup (api/src/db.js). Nothing in /api
+-- duplicates or hardcodes any SQL.
 --
 -- Requires MySQL 8.0.16+ (enforced CHECK constraints) and 8.0.1+ (SKIP LOCKED).
 
@@ -53,13 +52,7 @@ CREATE TABLE IF NOT EXISTS sms_queue (
   INDEX idx_sms_queue_status_created (status, created_at)
 ) ENGINE=InnoDB;
 
--- SQL-backed rate limiting, keyed by credential (api_keys.id or
--- worker_tokens.id) rather than IP - so it's shared correctly across
--- multiple API instances and can't be dodged by rotating source IP.
-CREATE TABLE IF NOT EXISTS rate_limit_hits (
-  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-  scope VARCHAR(32) NOT NULL,     -- 'api_key' or 'worker_token'
-  scope_id BIGINT UNSIGNED NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  INDEX idx_rate_limit_hits_scope (scope, scope_id, created_at)
-) ENGINE=InnoDB;
+-- Supports the per-API-key daily submission limit (COUNT of sms_queue rows
+-- for a given api_key_id in the trailing 24h) without a separate rate
+-- limit table.
+ALTER TABLE sms_queue ADD INDEX idx_sms_queue_api_key_created (api_key_id, created_at);
