@@ -21,14 +21,14 @@
   <nav>
     <a href="/">Send SMS</a>
     <a href="/users.html">Get API key</a>
-    <a href="/raspberrypi.html" class="active">Get worker token</a>
+    <a href="/worker.html" class="active">Get worker token</a>
   </nav>
 
-  <h1>Get a Raspberry Pi worker token</h1>
-  <p>Used by the Pi/mobile sender to pull queued SMS and report them as sent. Set as <code>Authorization: Bearer &lt;token&gt;</code> on the device.</p>
+  <h1>Get a worker token</h1>
+  <p>Used by the worker (the device sending SMS) to pull queued SMS and report them as sent. Set as <code>Authorization: Bearer &lt;token&gt;</code> on the device.</p>
   <form id="token-form">
     <label for="name">Device name</label>
-    <input id="name" type="text" placeholder="e.g. pi-livingroom" required />
+    <input id="name" type="text" placeholder="e.g. worker-livingroom" required />
 
     <button type="submit">Generate worker token</button>
   </form>
@@ -44,7 +44,7 @@
 
       result.hidden = true;
       try {
-        const res = await fetch("/api/v1/raspberrypi/token", {
+        const res = await fetch("/api/v1/worker/token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),

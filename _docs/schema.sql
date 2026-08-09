@@ -7,8 +7,13 @@
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   email VARCHAR(255) NOT NULL UNIQUE,
+  phone_number VARCHAR(32) NOT NULL, -- always stored E.164-normalized, e.g. +15551234567
+  country CHAR(2) NULL,              -- ISO 3166-1 alpha-2, derived from phone_number
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
+
+ALTER TABLE users ADD COLUMN phone_number VARCHAR(32) NOT NULL DEFAULT '' AFTER email;
+ALTER TABLE users ADD COLUMN country CHAR(2) NULL AFTER phone_number;
 
 -- Customer-facing API keys. Only these may submit SMS; they may never
 -- authenticate against the worker endpoints.
@@ -17,12 +22,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
   user_id BIGINT UNSIGNED NOT NULL,
   key_hash CHAR(64) NOT NULL UNIQUE, -- sha256 hex digest of the plaintext key
   label VARCHAR(255) NULL,
+  daily_sms_limit INT UNSIGNED NOT NULL DEFAULT 10, -- max /sms submissions per rolling 24h for this key
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   revoked_at TIMESTAMP NULL,
   CONSTRAINT fk_api_keys_user FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
 
--- Separate credential space for Raspberry Pi / mobile sender workers.
+ALTER TABLE api_keys ADD COLUMN daily_sms_limit INT UNSIGNED NOT NULL DEFAULT 10;
+
+-- Separate credential space for workers (the devices sending SMS).
 -- Deliberately not shared with api_keys so a leaked customer key can never
 -- pull or complete queue items.
 CREATE TABLE IF NOT EXISTS worker_tokens (

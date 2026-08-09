@@ -1,4 +1,4 @@
-// Everything the Raspberry Pi / mobile sender touches: get a worker
+// Everything the worker (the device sending SMS) touches: get a worker
 // token, pull the next SMS, report one as sent.
 const express = require("express");
 const { pool } = require("./db");
@@ -26,7 +26,9 @@ async function workerAuth(req, res, next) {
 }
 
 // Self-service: get a worker token for a device name. Open, no auth.
-router.post("/raspberrypi/token", wrap(async (req, res) => {
+// Registered before the /worker auth gate below so it stays unauthenticated
+// despite living under the /worker prefix.
+router.post("/worker/token", wrap(async (req, res) => {
   const { name } = req.body || {};
   if (typeof name !== "string" || name.trim() === "") {
     return res.status(400).json({ error: "'name' is required" });

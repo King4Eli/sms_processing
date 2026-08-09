@@ -2,11 +2,10 @@
 const express = require("express");
 const { pool } = require("./db");
 const { sha256Hex, generateToken } = require("./crypto");
+const { isValidEmail, parsePhone } = require("./validate");
 
 const router = express.Router();
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
-
-const DAILY_SMS_LIMIT_PER_API_KEY = 10;
 
 async function customerAuth(req, res, next) {
   const apiKey = req.header("X-Api-Key");
@@ -15,28 +14,50 @@ async function customerAuth(req, res, next) {
   }
 
   const [rows] = await pool.query(
-    `SELECT id, user_id FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL LIMIT 1`,
+    `SELECT id, user_id, daily_sms_limit FROM api_keys WHERE key_hash = ? AND revoked_at IS NULL LIMIT 1`,
     [sha256Hex(apiKey)]
   );
   if (rows.length === 0) {
     return res.status(401).json({ error: "Invalid or revoked API key" });
   }
 
-  req.auth = { apiKeyId: rows[0].id, userId: rows[0].user_id };
+  req.auth = {
+    apiKeyId: rows[0].id,
+    userId: rows[0].user_id,
+    dailySmsLimit: rows[0].daily_sms_limit,
+  };
   next();
 }
 
-// Self-service: get an API key for an email. Open, no auth, no rate limit.
+// Self-service: get an API key for an email + phone number. Open, no auth,
+// no rate limit.
 router.post("/users/token", wrap(async (req, res) => {
-  const { email, label } = req.body || {};
-  if (typeof email !== "string" || email.trim() === "") {
-    return res.status(400).json({ error: "'email' is required" });
+  const { email, phone, label } = req.body || {};
+  if (!isValidEmail(email)) {
+    return res.status(400).json({ error: "'email' must be a valid email address" });
   }
+
+  const parsedPhone = parsePhone(phone);
+  if (!parsedPhone) {
+    return res.status(400).json({
+      error: "'phone' must be a valid phone number in international format, e.g. +15551234567",
+    });
+  }
+  const { e164: phoneE164, country } = parsedPhone;
 
   const [existing] = await pool.query(`SELECT id FROM users WHERE email = ?`, [email]);
   let userId = existing[0]?.id;
-  if (!userId) {
-    const [result] = await pool.query(`INSERT INTO users (email) VALUES (?)`, [email]);
+  if (userId) {
+    await pool.query(`UPDATE users SET phone_number = ?, country = ? WHERE id = ?`, [
+      phoneE164,
+      country,
+      userId,
+    ]);
+  } else {
+    const [result] = await pool.query(
+      `INSERT INTO users (email, phone_number, country) VALUES (?, ?, ?)`,
+      [email, phoneE164, country]
+    );
     userId = result.insertId;
   }
 
@@ -46,17 +67,28 @@ router.post("/users/token", wrap(async (req, res) => {
     [userId, sha256Hex(apiKey), label || null]
   );
 
-  res.status(201).json({ id: result.insertId, userId, email, label: label || null, apiKey });
+  res.status(201).json({
+    id: result.insertId,
+    userId,
+    email,
+    phone: phoneE164,
+    country,
+    label: label || null,
+    apiKey,
+  });
 }));
 
 // Customer entry point into the queue. status starts at 0 (queued).
-// Limited to DAILY_SMS_LIMIT_PER_API_KEY submissions per API key per
-// rolling 24h, computed straight from sms_queue - no separate rate-limit
-// table (see idx_sms_queue_api_key_created in the schema).
+// Limited to this key's api_keys.daily_sms_limit submissions per rolling
+// 24h, computed straight from sms_queue - no separate rate-limit table
+// (see idx_sms_queue_api_key_created in the schema).
 router.post("/sms", customerAuth, wrap(async (req, res) => {
   const { to, message } = req.body || {};
-  if (typeof to !== "string" || to.trim() === "") {
-    return res.status(400).json({ error: "'to' is required" });
+  const parsedTo = parsePhone(to);
+  if (!parsedTo) {
+    return res.status(400).json({
+      error: "'to' must be a valid phone number in international format, e.g. +15551234567",
+    });
   }
   if (typeof message !== "string" || message.trim() === "") {
     return res.status(400).json({ error: "'message' is required" });
@@ -67,19 +99,19 @@ router.post("/sms", customerAuth, wrap(async (req, res) => {
      WHERE api_key_id = ? AND created_at >= (NOW() - INTERVAL 1 DAY)`,
     [req.auth.apiKeyId]
   );
-  if (count >= DAILY_SMS_LIMIT_PER_API_KEY) {
+  if (count >= req.auth.dailySmsLimit) {
     return res.status(429).json({
-      error: `Daily limit of ${DAILY_SMS_LIMIT_PER_API_KEY} SMS per API key reached`,
+      error: `Daily limit of ${req.auth.dailySmsLimit} SMS per API key reached`,
     });
   }
 
   const [result] = await pool.query(
     `INSERT INTO sms_queue (user_id, api_key_id, to_number, message, status)
      VALUES (?, ?, ?, ?, 0)`,
-    [req.auth.userId, req.auth.apiKeyId, to, message]
+    [req.auth.userId, req.auth.apiKeyId, parsedTo.e164, message]
   );
 
-  res.status(201).json({ id: result.insertId, to, message, status: 0 });
+  res.status(201).json({ id: result.insertId, to: parsedTo.e164, message, status: 0 });
 }));
 
 module.exports = router;

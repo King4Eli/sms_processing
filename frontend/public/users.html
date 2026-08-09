@@ -21,14 +21,17 @@
   <nav>
     <a href="/">Send SMS</a>
     <a href="/users.html" class="active">Get API key</a>
-    <a href="/raspberrypi.html">Get worker token</a>
+    <a href="/worker.html">Get worker token</a>
   </nav>
 
   <h1>Get a customer API key</h1>
-  <p>Used to submit SMS on the "Send SMS" page. Anyone with an email can generate one.</p>
+  <p>Used to submit SMS on the "Send SMS" page. Anyone with an email and phone number can generate one.</p>
   <form id="token-form">
     <label for="email">Email</label>
     <input id="email" type="email" required />
+
+    <label for="phone">Phone number</label>
+    <input id="phone" type="tel" placeholder="+15551234567" required />
 
     <label for="label">Label (optional)</label>
     <input id="label" type="text" placeholder="e.g. my app" />
@@ -44,6 +47,7 @@
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const email = document.getElementById("email").value;
+      const phone = document.getElementById("phone").value;
       const label = document.getElementById("label").value;
 
       result.hidden = true;
@@ -51,7 +55,7 @@
         const res = await fetch("/api/v1/users/token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, label: label || undefined }),
+          body: JSON.stringify({ email, phone, label: label || undefined }),
         });
         const body = await res.json();
 
