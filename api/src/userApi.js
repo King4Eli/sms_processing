@@ -79,24 +79,28 @@ router.post("/users/token", wrap(async (req, res) => {
 }));
 
 // Lists the numbers available to send from, so a customer can pick one
-// for 'from' below. Requires a valid API key but isn't otherwise scoped -
-// every PUBLIC worker number is available to every customer. Numbers
-// created without --public (the default) never appear here.
+// for 'from' below: every PUBLIC worker number (shared, from anyone) plus
+// any private worker an admin has assigned to this caller specifically
+// (worker_tokens.user_id, set via POST /admin/workers - see adminApi.js;
+// customers can never create or own a worker themselves). Someone else's
+// private worker never appears here.
 router.get("/numbers", customerAuth, wrap(async (req, res) => {
   const [rows] = await pool.query(
     `SELECT phone_number FROM worker_tokens
-     WHERE is_public = 1 AND revoked_at IS NULL ORDER BY phone_number ASC`
+     WHERE revoked_at IS NULL AND (is_public = 1 OR user_id = ?)
+     ORDER BY phone_number ASC`,
+    [req.auth.userId]
   );
   res.status(200).json(rows.map((r) => r.phone_number));
 }));
 
 // Customer entry point into the queue. status starts at 0 (queued).
-// 'from' must match an active, PUBLIC worker_tokens.phone_number (same
-// visibility rule as GET /numbers) - that worker becomes the only one
-// that can ever pull/complete this row (see workerApi.js). Limited to
-// this key's api_keys.daily_sms_limit submissions per rolling 24h,
-// computed straight from sms_queue - no separate rate-limit table (see
-// idx_sms_queue_api_key_created).
+// 'from' must be an active worker_tokens.phone_number that's either
+// public or admin-assigned to this caller (same visibility rule as GET
+// /numbers) - that worker becomes the only one that can ever pull/complete
+// this row (see workerApi.js). Limited to this key's api_keys.daily_sms_limit
+// submissions per rolling 24h, computed straight from sms_queue - no
+// separate rate-limit table (see idx_sms_queue_api_key_created).
 router.post("/sms", customerAuth, wrap(async (req, res) => {
   const { to, from, message } = req.body || {};
   const parsedTo = parsePhone(to);
@@ -116,8 +120,9 @@ router.post("/sms", customerAuth, wrap(async (req, res) => {
   }
 
   const [workerRows] = await pool.query(
-    `SELECT id FROM worker_tokens WHERE phone_number = ? AND is_public = 1 AND revoked_at IS NULL LIMIT 1`,
-    [parsedFrom.e164]
+    `SELECT id FROM worker_tokens
+     WHERE phone_number = ? AND revoked_at IS NULL AND (is_public = 1 OR user_id = ?) LIMIT 1`,
+    [parsedFrom.e164, req.auth.userId]
   );
   if (workerRows.length === 0) {
     return res.status(400).json({ error: "'from' is not a recognized sending number - see GET /numbers" });

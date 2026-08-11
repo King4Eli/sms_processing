@@ -5,6 +5,10 @@
 #
 # Schema is applied automatically on api startup from _docs/schema.sql -
 # no separate migrate step.
+#
+# ./.env/admin.env holds ADMIN_TOKEN, the shared secret gating
+# /api/v1/admin/* (worker management) - see _docs/admin-api.md. Without
+# it the admin API responds 503, everything else is unaffected.
 
 services:
   api:
@@ -14,6 +18,7 @@ services:
     restart: unless-stopped
     env_file:
       - ./.env/db.env
+      - ./.env/admin.env
     ports:
       - "3000:3000"
 

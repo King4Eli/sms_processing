@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Account · SMS Processing</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="brand-name"><span class="dot"></span> SMS Processing</div>
+      <a id="auth-pill" class="auth-pill" href="account.html">Log in</a>
+    </div>
+  </header>
+
+  <div class="page">
+    <nav class="tabs">
+      <a href="index.html" data-page="send">Send SMS</a>
+      <a href="account.html" data-page="account">Account</a>
+    </nav>
+
+    <div id="logged-in-view" hidden>
+      <h1>Your account</h1>
+      <p class="subtitle">Manage your API key.</p>
+      <div class="card">
+        <div class="account-status">
+          <div class="who">
+            Signed in
+            <span class="muted" id="masked-key"></span>
+          </div>
+          <button type="button" class="secondary" id="logout-btn">Log out</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Next steps</h2>
+        <p class="hint">Once your administrator provisions a worker number for your account, you can queue a message.</p>
+        <a class="btn" href="index.html">Send an SMS</a>
+      </div>
+    </div>
+
+    <div id="logged-out-view" hidden>
+      <h1>Create your account</h1>
+      <p class="subtitle">Just an email and phone number - no password needed.</p>
+
+      <div class="card">
+        <form id="signup-form">
+          <label for="email">Email</label>
+          <input id="email" type="email" required />
+
+          <label for="phone">Phone number</label>
+          <input id="phone" type="tel" placeholder="+15551234567" required />
+
+          <label for="label">API key label (optional)</label>
+          <input id="label" type="text" placeholder="e.g. my app" />
+
+          <button type="submit">Create account</button>
+        </form>
+        <div id="signup-result" class="result" hidden></div>
+      </div>
+
+      <div class="divider">or</div>
+
+      <div class="card">
+        <h2>Already have a key?</h2>
+        <p class="hint">Paste it to log in on this device/browser.</p>
+        <form id="login-form">
+          <label for="existing-key">API key</label>
+          <input id="existing-key" type="password" autocomplete="off" placeholder="ak_…" required />
+          <button type="submit" class="secondary">Log in</button>
+        </form>
+        <div id="login-result" class="result" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    initChrome("account");
+    render();
+
+    function render() {
+      const loggedIn = isLoggedIn();
+      document.getElementById("logged-in-view").hidden = !loggedIn;
+      document.getElementById("logged-out-view").hidden = loggedIn;
+      if (loggedIn) {
+        document.getElementById("masked-key").textContent = maskKey(getApiKey());
+      }
+    }
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      clearApiKey();
+      initChrome("account");
+      render();
+    });
+
+    document.getElementById("signup-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const email = document.getElementById("email").value;
+      const phone = document.getElementById("phone").value;
+      const label = document.getElementById("label").value;
+      const result = document.getElementById("signup-result");
+      const submitBtn = event.target.querySelector("button[type=submit]");
+
+      result.hidden = true;
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch("/api/v1/users/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, phone, label: label || undefined }),
+        });
+        const body = await res.json();
+
+        if (res.ok) {
+          setApiKey(body.apiKey);
+          result.hidden = false;
+          result.className = "result ok";
+          result.innerHTML = `Account created. Store this API key now, it will not be shown again:
+<div class="key-display"><span>${body.apiKey}</span><button type="button" id="copy-key">Copy</button></div>
+<button type="button" class="secondary" id="continue-btn">Continue to your account</button>`;
+          document.getElementById("copy-key").addEventListener("click", (e) => {
+            navigator.clipboard.writeText(body.apiKey);
+            e.target.textContent = "Copied!";
+            setTimeout(() => (e.target.textContent = "Copy"), 1500);
+          });
+          document.getElementById("continue-btn").addEventListener("click", render);
+          initChrome("account");
+        } else {
+          showResult(result, false, `Error ${res.status}: ${body.error || "unknown"}`);
+        }
+      } catch (err) {
+        showResult(result, false, `Request failed: ${err.message}`);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    document.getElementById("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const key = document.getElementById("existing-key").value.trim();
+      const result = document.getElementById("login-result");
+      const submitBtn = event.target.querySelector("button[type=submit]");
+
+      result.hidden = true;
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch("/api/v1/numbers", { headers: { "X-Api-Key": key } });
+        if (res.ok) {
+          setApiKey(key);
+          showResult(result, true, "Logged in.");
+          initChrome("account");
+          setTimeout(render, 500);
+        } else {
+          showResult(result, false, "That API key isn't valid or has been revoked.");
+        }
+      } catch (err) {
+        showResult(result, false, `Request failed: ${err.message}`);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

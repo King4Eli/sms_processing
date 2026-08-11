@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin · SMS Processing</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <div class="brand-name"><span class="dot"></span> SMS Processing — Admin</div>
+      <a class="auth-pill" href="index.html">Customer site</a>
+    </div>
+  </header>
+
+  <div class="page">
+    <div id="gate" class="card" hidden>
+      <h2>Admin sign-in</h2>
+      <p class="hint">Paste the token from <code>.env/admin.env</code> (<code>ADMIN_TOKEN</code>). Not the same as a customer API key.</p>
+      <form id="admin-login-form">
+        <label for="admin-token">Admin token</label>
+        <input id="admin-token" type="password" autocomplete="off" required />
+        <button type="submit">Unlock</button>
+      </form>
+      <div id="admin-login-result" class="result" hidden></div>
+    </div>
+
+    <div id="admin-view" hidden>
+      <div class="account-status" style="margin-bottom: 1.25rem;">
+        <h1 style="margin:0;">Workers</h1>
+        <button type="button" class="secondary" id="admin-logout-btn">Log out</button>
+      </div>
+      <p class="subtitle">Every worker device, across every customer. Customers can never create or manage these themselves.</p>
+
+      <div class="card">
+        <h2>All workers</h2>
+        <div id="worker-list" class="worker-list">
+          <div class="empty">Loading…</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Register a new worker</h2>
+        <p class="hint">You'll get a token shown once - store it on the device as its worker token.</p>
+        <form id="worker-form">
+          <label for="worker-name">Name</label>
+          <input id="worker-name" type="text" placeholder="e.g. living-room-gateway" required />
+
+          <label for="worker-phone">Phone number it sends as</label>
+          <input id="worker-phone" type="tel" placeholder="+15551234567" required />
+
+          <label for="worker-user-id">Assign to customer user id (optional)</label>
+          <input id="worker-user-id" type="number" min="1" placeholder="leave blank for a global worker" />
+
+          <div class="checkbox-row">
+            <input id="worker-public" type="checkbox" />
+            <label for="worker-public">Make public (any customer can send from this number)</label>
+          </div>
+
+          <button type="submit">Register worker</button>
+        </form>
+        <div id="worker-result" class="result" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+  <script>
+    const gate = document.getElementById("gate");
+    const view = document.getElementById("admin-view");
+
+    render();
+
+    function render() {
+      if (isAdmin()) {
+        gate.hidden = true;
+        view.hidden = false;
+        init();
+      } else {
+        gate.hidden = false;
+        view.hidden = true;
+      }
+    }
+
+    document.getElementById("admin-login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const token = document.getElementById("admin-token").value.trim();
+      const result = document.getElementById("admin-login-result");
+      const submitBtn = event.target.querySelector("button[type=submit]");
+
+      result.hidden = true;
+      submitBtn.disabled = true;
+      try {
+        const res = await fetch("/api/v1/admin/workers", { headers: { "X-Admin-Token": token } });
+        if (res.ok) {
+          setAdminToken(token);
+          render();
+        } else if (res.status === 503) {
+          showResult(result, false, "Admin API not configured on the server (missing ADMIN_TOKEN).");
+        } else {
+          showResult(result, false, "That admin token isn't valid.");
+        }
+      } catch (err) {
+        showResult(result, false, `Request failed: ${err.message}`);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    document.getElementById("admin-logout-btn").addEventListener("click", () => {
+      clearAdminToken();
+      render();
+    });
+
+    function init() {
+      const list = document.getElementById("worker-list");
+      const form = document.getElementById("worker-form");
+      const result = document.getElementById("worker-result");
+
+      function escapeHtml(str) {
+        const div = document.createElement("div");
+        div.textContent = str;
+        return div.innerHTML;
+      }
+
+      function renderList(workers) {
+        if (workers.length === 0) {
+          list.innerHTML = '<div class="empty">No workers registered yet.</div>';
+          return;
+        }
+        list.innerHTML = workers
+          .map((worker) => {
+            const badges = [
+              worker.revokedAt
+                ? '<span class="badge revoked">Revoked</span>'
+                : `<span class="badge ${worker.isPublic ? "public" : "private"}">${worker.isPublic ? "Public" : "Private"}</span>`,
+            ].join("");
+            const owner = worker.userId ? `owner: user #${worker.userId}` : "global";
+            return `
+              <div class="worker-item" data-id="${worker.id}">
+                <div class="worker-meta">
+                  <div class="worker-name">${escapeHtml(worker.name)} ${badges}</div>
+                  <div class="worker-phone">${worker.phone} · ${owner}</div>
+                </div>
+                ${
+                  worker.revokedAt
+                    ? ""
+                    : `<button type="button" class="danger revoke-btn" data-id="${worker.id}">Revoke</button>`
+                }
+              </div>`;
+          })
+          .join("");
+
+        list.querySelectorAll(".revoke-btn").forEach((btn) => {
+          btn.addEventListener("click", () => revokeWorker(btn.dataset.id));
+        });
+      }
+
+      async function loadWorkers() {
+        list.innerHTML = '<div class="empty"><span class="spinner"></span> Loading…</div>';
+        try {
+          const { res, body } = await adminFetch("/api/v1/admin/workers");
+          if (!res.ok) {
+            list.innerHTML = '<div class="empty">Could not load workers.</div>';
+            return;
+          }
+          renderList(body);
+        } catch (err) {
+          list.innerHTML = '<div class="empty">Failed to load workers.</div>';
+        }
+      }
+
+      async function revokeWorker(id) {
+        if (!confirm("Revoke this worker? It will stop sending immediately.")) return;
+        try {
+          const { res, body } = await adminFetch(`/api/v1/admin/workers/${id}/revoke`, { method: "PATCH" });
+          if (res.ok) {
+            loadWorkers();
+          } else {
+            alert(`Error ${res.status}: ${body?.error || "unknown"}`);
+          }
+        } catch (err) {
+          alert(`Request failed: ${err.message}`);
+        }
+      }
+
+      loadWorkers();
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const name = document.getElementById("worker-name").value;
+        const phone = document.getElementById("worker-phone").value;
+        const isPublic = document.getElementById("worker-public").checked;
+        const userIdRaw = document.getElementById("worker-user-id").value;
+        const userId = userIdRaw ? Number(userIdRaw) : undefined;
+        const submitBtn = form.querySelector("button[type=submit]");
+
+        result.hidden = true;
+        submitBtn.disabled = true;
+        try {
+          const { res, body } = await adminFetch("/api/v1/admin/workers", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, phone, public: isPublic, userId }),
+          });
+
+          if (res.ok) {
+            result.hidden = false;
+            result.className = "result ok";
+            result.innerHTML = `Worker registered. Store this token on the device now, it will not be shown again:
+<div class="key-display"><span>${body.token}</span><button type="button" id="copy-token">Copy</button></div>`;
+            document.getElementById("copy-token").addEventListener("click", (e) => {
+              navigator.clipboard.writeText(body.token);
+              e.target.textContent = "Copied!";
+              setTimeout(() => (e.target.textContent = "Copy"), 1500);
+            });
+            form.reset();
+            loadWorkers();
+          } else {
+            showResult(result, false, `Error ${res.status}: ${body?.error || "unknown"}`);
+          }
+        } catch (err) {
+          showResult(result, false, `Request failed: ${err.message}`);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
+  </script>
+</body>
+</html>

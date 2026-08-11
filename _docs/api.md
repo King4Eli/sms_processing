@@ -1,6 +1,7 @@
 # SMS Processing API
 
-Base URL: `/api/v1`. Implementation: `api/src/userApi.js`, `api/src/workerApi.js`.
+Base URL: `/api/v1`. Implementation: `api/src/userApi.js`,
+`api/src/workerApi.js`, `api/src/adminApi.js`.
 
 ## Auth
 
@@ -8,8 +9,12 @@ Base URL: `/api/v1`. Implementation: `api/src/userApi.js`, `api/src/workerApi.js
 |---|---|---|
 | Customer | `X-Api-Key: <key>` | `api_keys` |
 | Worker | `Authorization: Bearer <token>` | `worker_tokens` |
+| Admin | `X-Admin-Token: <token>` | none — static secret, `.env/admin.env` |
 
-Separate tables — one credential type never authenticates the other's routes.
+Separate credential spaces — one type never authenticates another's
+routes. Workers are never self-service: a customer can select an
+available number as `from`, but only an admin can create, list, or
+revoke a worker. See [`admin-api.md`](./admin-api.md).
 
 ## `POST /users/token`
 
@@ -25,9 +30,10 @@ Open, no auth, no rate limit. Body: `{ email, phone, label? }`.
 
 ## `GET /numbers`
 
-Auth: customer. Lists `worker_tokens.phone_number` where `is_public = 1
-AND revoked_at IS NULL` — the numbers a customer may use as `from` below.
-Private workers (created without `--public`) never appear here.
+Auth: customer. Lists `worker_tokens.phone_number` where `revoked_at IS
+NULL AND (is_public = 1 OR user_id = <caller>)` — every shared public
+number, plus any private worker an admin has assigned to this caller
+specifically. Someone else's private worker never appears here.
 
 `200`: `["+15551234567", ...]`
 
@@ -36,9 +42,10 @@ Private workers (created without `--public`) never appear here.
 Auth: customer. Body: `{ to, from, message }`.
 
 - `to` / `from` — both validated/normalized like `phone` in `/users/token`.
-- `from` must match a **public**, active worker number (same set as `GET
-  /numbers`) — otherwise `400`. That worker becomes the *only* one that
-  can ever pull or complete this message (see `/worker/sms/pull` below).
+- `from` must match an active worker number the caller may use (same set
+  as `GET /numbers`: public, or owned by the caller) — otherwise `400`.
+  That worker becomes the *only* one that can ever pull or complete this
+  message (see `/worker/sms/pull` below).
 
 Rate limit: `api_keys.daily_sms_limit` (default `10`) per rolling 24h,
 counted from `sms_queue` directly — see Rate limiting below. `429` if exceeded.
@@ -94,11 +101,16 @@ Nothing else (`/worker/*`, `/users/token`, `/numbers`) is rate limited.
 | Type | How | Auth |
 |---|---|---|
 | API key | `POST /users/token` | none — self-service |
-| Worker token | `docker compose exec api node scripts/create-worker-token.js "<name>" "<phone>" [--public]` | requires container exec access, not HTTP |
+| Worker token | `POST /admin/workers` | admin — `X-Admin-Token` |
+| Worker token (alternate) | `docker compose exec api node scripts/create-worker-token.js "<name>" "<phone>" [--public]` | requires container exec access, not HTTP |
 
-Worker tokens grant full pull/complete access to every customer's queue,
-so unlike API keys there's no HTTP route for creating one — see
-[`worker-api.md`](./worker-api.md) for the script's full usage
+Both worker-token paths produce the same thing; the HTTP route is just
+the CLI script without needing container exec. A customer can never
+create, list, or revoke a worker themselves — see
+[`admin-api.md`](./admin-api.md). A worker token only ever pulls/completes
+SMS submitted against its own number (`worker_token_id` scoping in
+`workerApi.js`), regardless of which path created it. See
+[`worker-api.md`](./worker-api.md) for the CLI script's full usage
 (`--public`/`-p`, `-h`/`--help`). Both credential types are shown once;
 only their SHA-256 hash is stored (`api_keys.key_hash` /
 `worker_tokens.token_hash`).

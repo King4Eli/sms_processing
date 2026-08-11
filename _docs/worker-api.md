@@ -1,11 +1,20 @@
 # Worker API
 
 Base URL: `/api/v1`. Implementation: `api/src/workerApi.js`. Two HTTP
-routes total — token issuance is not one of them.
+routes total for pull/report — token issuance is a separate concern (below).
 
-## Get a token (once, per device)
+## Get a token (once, per device) — admin only
 
-No HTTP route. Run inside the container:
+There is no self-service worker creation; a customer can never mint one
+for themselves. Two admin-only ways, same resulting credential shape
+(`wk_...`, `Authorization: Bearer` below):
+
+**HTTP** — `POST /admin/workers`, authenticated with `X-Admin-Token` (see
+[`admin-api.md`](./admin-api.md)). Optionally pass `userId` to privately
+assign the resulting worker to one customer account (they alone may use
+it as `from`, public or not); omit it for a global worker.
+
+**CLI** — run inside the container:
 
 ```bash
 docker compose exec api node scripts/create-worker-token.js "worker-livingroom" "+15551234567" [--public]
@@ -17,11 +26,12 @@ node scripts/create-worker-token.js -h   # full usage
   validated (`libphonenumber-js`, real+valid, international format) and
   normalized to E.164 **before insert** — an invalid number is rejected
   and nothing is written. Unique across all worker tokens.
-- `--public` / `-p` — makes this number visible to customers via `GET
-  /numbers` and selectable as `from` in `POST /sms`. **Default: private**
-  — omit it and customers can neither see nor use this number.
+- `--public` / `-p` — makes this number visible to every customer via
+  `GET /numbers` and selectable as `from` in `POST /sms`. **Default:
+  private** (and, via the CLI, unassigned — the HTTP route is the only
+  way to tie a private worker to a specific customer).
 
-Prints the token once — store it on the device, send as
+Both paths print/return the token once — store it on the device, send as
 `Authorization: Bearer <token>` on every request below.
 
 ## Pull is scoped to your own number

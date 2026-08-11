@@ -3,108 +3,123 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SMS Processing</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
-    nav { display: flex; gap: 1rem; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid #ddd; }
-    nav a { text-decoration: none; color: #555; }
-    nav a.active { color: #111; font-weight: 600; }
-    label { display: block; margin-top: 1rem; font-weight: 600; }
-    input, textarea, select { width: 100%; box-sizing: border-box; padding: 0.5rem; margin-top: 0.25rem; font: inherit; }
-    button { margin-top: 1.5rem; padding: 0.6rem 1.2rem; font: inherit; cursor: pointer; }
-    #result { margin-top: 1.5rem; padding: 0.75rem; border-radius: 4px; white-space: pre-wrap; font-family: monospace; font-size: 0.85rem; }
-    #result.ok { background: #e6f4ea; color: #1e4620; }
-    #result.err { background: #fce8e6; color: #611a15; }
-  </style>
+  <title>Send SMS · SMS Processing</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <nav>
-    <a href="/" class="active">Send SMS</a>
-    <a href="/users.html">Get API key</a>
-  </nav>
+  <header class="top">
+    <div class="brand">
+      <div class="brand-name"><span class="dot"></span> SMS Processing</div>
+      <a id="auth-pill" class="auth-pill" href="account.html">Log in</a>
+    </div>
+  </header>
 
-  <h1>Send an SMS</h1>
-  <form id="sms-form">
-    <label for="api-key">API key</label>
-    <input id="api-key" type="password" autocomplete="off" required />
+  <div class="page">
+    <nav class="tabs">
+      <a href="index.html" data-page="send">Send SMS</a>
+      <a href="account.html" data-page="account">Account</a>
+    </nav>
 
-    <label for="from">From</label>
-    <select id="from" required>
-      <option value="">Enter API key above to load numbers</option>
-    </select>
+    <div id="gate" class="card" hidden>
+      <h2>Sign in to send a message</h2>
+      <p class="hint">You need an account and API key before you can queue an SMS.</p>
+      <a class="btn" href="account.html">Create account / log in</a>
+    </div>
 
-    <label for="to">To</label>
-    <input id="to" type="tel" placeholder="+15551234567" required />
+    <div id="send-view" hidden>
+      <h1>Send an SMS</h1>
+      <p class="subtitle">Queues a message for the worker device you choose below to send.</p>
 
-    <label for="message">Message</label>
-    <textarea id="message" rows="4" required></textarea>
+      <div class="card">
+        <form id="sms-form">
+          <label for="from">From</label>
+          <select id="from" required>
+            <option value="">Loading numbers…</option>
+          </select>
 
-    <button type="submit">Queue SMS</button>
-  </form>
-  <div id="result" hidden></div>
+          <label for="to">To</label>
+          <input id="to" type="tel" placeholder="+15551234567" required />
 
+          <label for="message">Message</label>
+          <textarea id="message" rows="4" placeholder="Type your message…" required></textarea>
+
+          <button type="submit">Queue SMS</button>
+        </form>
+        <div id="result" class="result" hidden></div>
+      </div>
+
+      <p class="hint" style="text-align:center; margin-top: -0.5rem;">
+        No numbers to choose from? Ask your administrator to provision a worker for your account.
+      </p>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
   <script>
-    const form = document.getElementById("sms-form");
-    const result = document.getElementById("result");
-    const apiKeyInput = document.getElementById("api-key");
-    const fromSelect = document.getElementById("from");
+    initChrome("send");
 
-    async function loadNumbers() {
-      const apiKey = apiKeyInput.value;
-      if (!apiKey) return;
+    const gate = document.getElementById("gate");
+    const view = document.getElementById("send-view");
 
-      fromSelect.innerHTML = '<option value="">Loading...</option>';
-      try {
-        const res = await fetch("/api/v1/numbers", { headers: { "X-Api-Key": apiKey } });
-        if (!res.ok) {
-          fromSelect.innerHTML = '<option value="">Invalid API key</option>';
-          return;
-        }
-        const numbers = await res.json();
-        fromSelect.innerHTML = numbers.length
-          ? numbers.map((n) => `<option value="${n}">${n}</option>`).join("")
-          : '<option value="">No numbers available</option>';
-      } catch (err) {
-        fromSelect.innerHTML = '<option value="">Failed to load numbers</option>';
-      }
+    if (!isLoggedIn()) {
+      gate.hidden = false;
+    } else {
+      view.hidden = false;
+      init();
     }
 
-    apiKeyInput.addEventListener("blur", loadNumbers);
+    function init() {
+      const form = document.getElementById("sms-form");
+      const result = document.getElementById("result");
+      const fromSelect = document.getElementById("from");
 
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const apiKey = apiKeyInput.value;
-      const from = fromSelect.value;
-      const to = document.getElementById("to").value;
-      const message = document.getElementById("message").value;
-
-      result.hidden = true;
-      try {
-        const res = await fetch("/api/v1/sms", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Api-Key": apiKey,
-          },
-          body: JSON.stringify({ to, from, message }),
-        });
-        const body = await res.json();
-
-        result.hidden = false;
-        result.className = res.ok ? "ok" : "err";
-        result.textContent = res.ok
-          ? `Queued (id ${body.id}, status ${body.status})`
-          : `Error ${res.status}: ${body.error || "unknown"}`;
-
-        if (res.ok) {
-          document.getElementById("message").value = "";
+      async function loadNumbers() {
+        fromSelect.innerHTML = '<option value="">Loading…</option>';
+        try {
+          const { res, body } = await apiFetch("/api/v1/numbers");
+          if (!res.ok) {
+            fromSelect.innerHTML = '<option value="">Could not load numbers - check your API key</option>';
+            return;
+          }
+          fromSelect.innerHTML = body.length
+            ? body.map((n) => `<option value="${n}">${n}</option>`).join("")
+            : '<option value="">No numbers available yet</option>';
+        } catch (err) {
+          fromSelect.innerHTML = '<option value="">Failed to load numbers</option>';
         }
-      } catch (err) {
-        result.hidden = false;
-        result.className = "err";
-        result.textContent = `Request failed: ${err.message}`;
       }
-    });
+
+      loadNumbers();
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const from = fromSelect.value;
+        const to = document.getElementById("to").value;
+        const message = document.getElementById("message").value;
+
+        result.hidden = true;
+        const submitBtn = form.querySelector("button[type=submit]");
+        submitBtn.disabled = true;
+        try {
+          const { res, body } = await apiFetch("/api/v1/sms", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ to, from, message }),
+          });
+
+          if (res.ok) {
+            showResult(result, true, `Queued (id ${body.id}, status ${body.status})`);
+            document.getElementById("message").value = "";
+          } else {
+            showResult(result, false, `Error ${res.status}: ${body?.error || "unknown"}`);
+          }
+        } catch (err) {
+          showResult(result, false, `Request failed: ${err.message}`);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
   </script>
 </body>
 </html>

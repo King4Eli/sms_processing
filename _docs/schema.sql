@@ -51,6 +51,16 @@ ALTER TABLE worker_tokens ADD COLUMN phone_number VARCHAR(32) NULL AFTER name;
 ALTER TABLE worker_tokens ADD UNIQUE KEY uq_worker_tokens_phone_number (phone_number);
 ALTER TABLE worker_tokens ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 0 AFTER phone_number;
 
+-- Optional customer this worker is privately assigned to, set by an admin
+-- (POST /admin/workers or scripts/create-worker-token.js) - customers
+-- never set this themselves, there is no self-service worker creation.
+-- NULL = global/unassigned. An assigned owner may always select that
+-- worker's number as 'from', public or not - see GET /numbers / POST
+-- /sms in userApi.js.
+ALTER TABLE worker_tokens ADD COLUMN user_id BIGINT UNSIGNED NULL AFTER name;
+ALTER TABLE worker_tokens ADD CONSTRAINT fk_worker_tokens_user FOREIGN KEY (user_id) REFERENCES users(id);
+ALTER TABLE worker_tokens ADD INDEX idx_worker_tokens_user (user_id);
+
 CREATE TABLE IF NOT EXISTS sms_queue (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id BIGINT UNSIGNED NOT NULL,
