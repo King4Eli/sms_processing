@@ -43,7 +43,7 @@ async function main() {
   const parsedPhone = parsePhone(phone);
   if (!parsedPhone) {
     console.error(
-      `"${phone}" is not a valid phone number in international format (e.g. +15551234567) - rejected before insert.`
+      `"${phone}" is not a valid phone number in international format (e.g. +15551234567) - rejected before insert.`,
     );
     process.exit(1);
   }
@@ -51,13 +51,13 @@ async function main() {
   const token = generateToken("wk");
   const [result] = await pool.query(
     `INSERT INTO worker_tokens (name, phone_number, is_public, token_hash) VALUES (?, ?, ?, ?)`,
-    [name, parsedPhone.e164, isPublic ? 1 : 0, sha256Hex(token)]
+    [name, parsedPhone.e164, isPublic ? 1 : 0, sha256Hex(token)],
   );
 
   console.log(
     `Worker token created (id ${result.insertId}) for "${name}" <${parsedPhone.e164}>, ${
       isPublic ? "public" : "private"
-    }. Store it now, it will not be shown again:\n`
+    }. Store it now, it will not be shown again:\n`,
   );
   console.log(token);
 
@@ -66,7 +66,9 @@ async function main() {
 
 main().catch((err) => {
   if (err.errno === 1062) {
-    console.error(`That phone number is already assigned to another worker token.`);
+    console.error(
+      `That phone number is already assigned to another worker token.`,
+    );
     process.exit(1);
   }
   console.error(err);

@@ -5,7 +5,9 @@ const EMAIL_RE =
   /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/;
 
 function isValidEmail(email) {
-  return typeof email === "string" && email.length <= 254 && EMAIL_RE.test(email);
+  return (
+    typeof email === "string" && email.length <= 254 && EMAIL_RE.test(email)
+  );
 }
 
 // Requires an internationally-formatted number (leading + and country
