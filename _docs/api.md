@@ -52,9 +52,9 @@ Rate limit: `api_keys.daily_sms_limit` (default `10`) per rolling 24h,
 counted from `sms_queue` directly — see Rate limiting below. `429` if exceeded.
 
 `201`: `{ id, to, from, message, status: 0 }` — `from` echoes back the
-worker id, not a phone number. `status` stays `0` (queued); nothing
-currently consumes the queue — there is no worker-facing pull/delivery
-API.
+worker id, not a phone number. `status` starts at `0` (queued); a
+worker device pulls and sends it from there — see "Worker device flow"
+in [`admin-api.md`](./admin-api.md).
 
 ## Rate limiting
 

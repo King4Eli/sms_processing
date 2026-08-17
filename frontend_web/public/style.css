@@ -65,11 +65,15 @@
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, Helvetica,
+    Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
   line-height: 1.5;
@@ -138,11 +142,19 @@ nav.tabs a {
   font-size: 0.88rem;
   padding: 0.55rem 0.5rem;
   border-radius: calc(var(--radius) - 4px);
-  transition: background 0.15s ease, color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease;
 }
 
-nav.tabs a:hover { color: var(--text); background: var(--surface-2); }
-nav.tabs a.active { color: var(--primary-text); background: var(--primary); }
+nav.tabs a:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+nav.tabs a.active {
+  color: var(--primary-text);
+  background: var(--primary);
+}
 
 .auth-pill {
   font-size: 0.78rem;
@@ -154,7 +166,9 @@ nav.tabs a.active { color: var(--primary-text); background: var(--primary); }
   text-decoration: none;
   white-space: nowrap;
 }
-.auth-pill:hover { background: rgba(255, 255, 255, 0.28); }
+.auth-pill:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
 
 h1 {
   font-size: 1.5rem;
@@ -195,9 +209,13 @@ label {
   font-size: 0.85rem;
 }
 
-label:first-child { margin-top: 0; }
+label:first-child {
+  margin-top: 0;
+}
 
-input, textarea, select {
+input,
+textarea,
+select {
   width: 100%;
   box-sizing: border-box;
   padding: 0.6rem 0.7rem;
@@ -208,16 +226,22 @@ input, textarea, select {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
-input:focus, textarea:focus, select:focus {
+input:focus,
+textarea:focus,
+select:focus {
   outline: none;
   border-color: var(--primary);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 20%, transparent);
 }
 
-textarea { resize: vertical; }
+textarea {
+  resize: vertical;
+}
 
 .checkbox-row {
   display: flex;
@@ -225,10 +249,17 @@ textarea { resize: vertical; }
   gap: 0.5rem;
   margin-top: 1rem;
 }
-.checkbox-row input { width: auto; margin: 0; }
-.checkbox-row label { margin: 0; font-weight: 500; }
+.checkbox-row input {
+  width: auto;
+  margin: 0;
+}
+.checkbox-row label {
+  margin: 0;
+  font-weight: 500;
+}
 
-button, .btn {
+button,
+.btn {
   margin-top: 1.5rem;
   padding: 0.65rem 1.3rem;
   font: inherit;
@@ -239,27 +270,43 @@ button, .btn {
   color: var(--primary-text);
   border: none;
   border-radius: 8px;
-  transition: background 0.15s ease, transform 0.05s ease;
+  transition:
+    background 0.15s ease,
+    transform 0.05s ease;
 }
-button:hover, .btn:hover { background: var(--primary-hover); }
-button:active, .btn:active { transform: translateY(1px); }
-button:disabled { opacity: 0.6; cursor: not-allowed; }
+button:hover,
+.btn:hover {
+  background: var(--primary-hover);
+}
+button:active,
+.btn:active {
+  transform: translateY(1px);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 button.secondary {
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
 }
-button.secondary:hover { background: var(--surface-2); }
+button.secondary:hover {
+  background: var(--surface-2);
+}
 
 button.danger {
   background: transparent;
   color: var(--err-text);
   border: 1px solid var(--err-border);
 }
-button.danger:hover { background: var(--err-bg); }
+button.danger:hover {
+  background: var(--err-bg);
+}
 
-#result, .result {
+#result,
+.result {
   margin-top: 1.25rem;
   padding: 0.75rem 0.9rem;
   border-radius: 8px;
@@ -269,8 +316,18 @@ button.danger:hover { background: var(--err-bg); }
   font-size: 0.82rem;
   border: 1px solid transparent;
 }
-#result.ok, .result.ok { background: var(--ok-bg); color: var(--ok-text); border-color: var(--ok-border); }
-#result.err, .result.err { background: var(--err-bg); color: var(--err-text); border-color: var(--err-border); }
+#result.ok,
+.result.ok {
+  background: var(--ok-bg);
+  color: var(--ok-text);
+  border-color: var(--ok-border);
+}
+#result.err,
+.result.err {
+  background: var(--err-bg);
+  color: var(--err-text);
+  border-color: var(--err-border);
+}
 
 .divider {
   display: flex;
@@ -280,7 +337,8 @@ button.danger:hover { background: var(--err-bg); }
   color: var(--text-muted);
   font-size: 0.8rem;
 }
-.divider::before, .divider::after {
+.divider::before,
+.divider::after {
   content: "";
   flex: 1;
   height: 1px;
@@ -294,7 +352,11 @@ button.danger:hover { background: var(--err-bg); }
   padding: 1.5rem 0.5rem;
 }
 
-.worker-list { display: flex; flex-direction: column; gap: 0.75rem; }
+.worker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
 
 .worker-item {
   display: flex;
@@ -307,9 +369,18 @@ button.danger:hover { background: var(--err-bg); }
   border-radius: 8px;
 }
 
-.worker-item .worker-meta { min-width: 0; }
-.worker-item .worker-name { font-weight: 600; font-size: 0.92rem; }
-.worker-item .worker-phone { color: var(--text-muted); font-size: 0.82rem; font-family: ui-monospace, monospace; }
+.worker-item .worker-meta {
+  min-width: 0;
+}
+.worker-item .worker-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.worker-item .worker-phone {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-family: ui-monospace, monospace;
+}
 
 .badge {
   display: inline-block;
@@ -322,9 +393,18 @@ button.danger:hover { background: var(--err-bg); }
   margin-left: 0.4rem;
   vertical-align: middle;
 }
-.badge.public { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--primary); }
-.badge.private { background: var(--border); color: var(--text-muted); }
-.badge.revoked { background: var(--err-bg); color: var(--err-text); }
+.badge.public {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  color: var(--primary);
+}
+.badge.private {
+  background: var(--border);
+  color: var(--text-muted);
+}
+.badge.revoked {
+  background: var(--err-bg);
+  color: var(--err-text);
+}
 
 .key-display {
   background: var(--surface-2);
@@ -355,11 +435,24 @@ button.danger:hover { background: var(--err-bg); }
   gap: 1rem;
 }
 
-.account-status .who { font-size: 0.9rem; }
-.account-status .who .muted { color: var(--text-muted); font-size: 0.8rem; display: block; margin-top: 0.15rem; }
+.account-status .who {
+  font-size: 0.9rem;
+}
+.account-status .who .muted {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  display: block;
+  margin-top: 0.15rem;
+}
 
-a.link { color: var(--primary); text-decoration: none; font-weight: 600; }
-a.link:hover { text-decoration: underline; }
+a.link {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+a.link:hover {
+  text-decoration: underline;
+}
 
 .spinner {
   display: inline-block;
@@ -371,4 +464,8 @@ a.link:hover { text-decoration: underline; }
   animation: spin 0.6s linear infinite;
   vertical-align: -0.15em;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

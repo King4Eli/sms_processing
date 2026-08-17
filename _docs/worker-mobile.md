@@ -1,12 +1,11 @@
 # smsJustu (mobile)
 
 Android app at `frontend_worker_mobile/`. Package
-`com.smsjustu.app`, app label "smsJustu". A mobile client for
-the [Admin API](./admin-api.md) only — it manages worker records
-(sender identities customers can pick as `from`; create/list/revoke).
-There is no worker-facing pull/delivery API in this system at all (see
-"No worker-facing API" in `admin-api.md`) — this app has nothing to do
-with sending SMS.
+`com.smsjustu.app`, app label "smsJustu". A client for the
+[Admin API](./admin-api.md): it manages worker records (sender
+identities customers can pick as `from`; create/list/revoke) and,
+if configured with a worker to send as, actually sends the queued
+messages via the device's own default SIM — see "Sending SMS" below.
 
 Kotlin + Jetpack Compose, minSdk 24, targetSdk 36. Networking is OkHttp
 (`java.net.HttpURLConnection` on Android rejects the `PATCH` method
@@ -19,15 +18,20 @@ option here).
   dialog, revoke confirmation, settings dialog. No navigation library;
   everything is dialogs over one screen.
 - `AdminApiClient.kt` — thin wrapper over `/api/v1/admin/*`
-  (`listWorkers`, `createWorker`, `revokeWorker`), `X-Admin-Token` on
-  every request. Talks to the same admin routes documented in
-  [`admin-api.md`](./admin-api.md).
+  (`listWorkers`, `createWorker`, `revokeWorker`, `pullPendingSms`,
+  `reportSmsResult`), `X-Admin-Token` on every request. Talks to the
+  same admin routes documented in [`admin-api.md`](./admin-api.md).
 - `Settings.kt` — `SharedPreferences` wrapper: server URL, admin token,
-  pull toggle, background-sync toggle. Nothing here is encrypted; the
-  admin token is a static shared secret with the same blast radius as
-  putting it in `.env/admin.env`, treat a device holding it accordingly.
+  pull toggle, background-sync toggle, the configured send-as
+  `workerId`. Nothing here is encrypted; the admin token is a static
+  shared secret with the same blast radius as putting it in
+  `.env/admin.env`, treat a device holding it accordingly.
 - `SyncService.kt`, `StartServiceReceiver.kt`, `RestartScheduler.kt`,
   `SmsJustuApplication.kt` — the background-service machinery, see below.
+- `SmsSender.kt` — sends one message via `SmsManager` on the device's
+  default SIM, splitting into multipart if needed, and resolves once
+  every part's sent-broadcast has come back (success or a specific
+  `SmsManager.RESULT_ERROR_*`).
 
 ## Setup
 
@@ -58,6 +62,35 @@ Server-side validation errors (bad phone format, duplicate active
 number, etc.) surface verbatim in a Snackbar — the client does no
 independent phone-number validation itself.
 
+## Sending SMS
+
+Off by default — a device only sends once a worker is picked under
+"Send as worker" in Settings, which (a) persists `Settings.workerId`
+and (b) requests `SEND_SMS` at that point if not already granted.
+The picker only offers active, public workers, since those are the
+only ones `POST /sms` (see [`api.md`](./api.md)) will ever have queued
+anything against.
+
+**This is a manual, unverified binding** — Android has no reliable way
+for the app to read back "what's this SIM's own phone number" (carrier
+support for it is inconsistent and getting more locked down each
+release), so there's no way to confirm the picked worker's
+`phone_number` actually matches the device's SIM. Get it wrong and
+messages send fine, just from a number that isn't what the recipient
+expects. One worker per physical device/SIM is the only setup that
+makes sense here; multi-SIM (multiple workers on one device) isn't
+implemented — see the multi-SIM discussion this feature grew out of.
+
+Every sync cycle (see below), if `workerId` is set and `SEND_SMS` is
+granted: `AdminApiClient.pullPendingSms(workerId)` claims whatever's
+queued, each message goes through `SmsSender.send()` on the default
+SIM, and the outcome is reported back with `reportSmsResult()`
+regardless of success/failure — a message that's claimed but never
+reported would stay claimed server-side forever. Each attempt logs a
+`SENT` or `UNDELIVERED` event (`EventLog`, tagged with `workerId` so it
+also shows under that worker's own "Log"), which is what the "Sent" /
+"Undelivered" counters in the Activity log actually count.
+
 ## Background sync service
 
 Optional, off by default. The Settings dialog has two independent
@@ -72,11 +105,14 @@ switches:
   no effect unless Pull is also on — both flags are checked before any
   boot/crash restart fires.
 
-Since list/create/revoke are all on-demand taps, the service needs an
-actual job to justify staying resident — it polls `GET /admin/workers`
-every 60s (`SyncService.SYNC_INTERVAL_MS`) and keeps a low-priority,
+Every 60s (`SyncService.SYNC_INTERVAL_MS`) it polls `GET
+/admin/workers`, then drains and sends any pending SMS for the
+configured worker (see above), and keeps a low-priority,
 non-dismissible notification updated with the active worker count and
-last-sync time. Tapping the notification opens the app.
+last-sync time. Tapping the notification opens the app. Note the FAB /
+manual refresh in `MainActivity` only re-lists workers — sending only
+ever happens from this background cycle, so `Settings.pullEnabled` is
+the actual on/off switch for whether messages go out at all.
 
 Mechanics:
 

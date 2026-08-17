@@ -27,6 +27,12 @@ data class CreatedWorker(
     val isPublic: Boolean
 )
 
+data class PendingSms(
+    val id: Long,
+    val to: String,
+    val message: String
+)
+
 class AdminApiException(message: String) : Exception(message)
 
 private val JSON_MEDIA_TYPE = "application/json".toMediaType()
@@ -122,5 +128,53 @@ class AdminApiClient(private val baseUrl: String, private val adminToken: String
 
     suspend fun revokeWorker(id: Long) {
         request("PATCH", "/api/v1/admin/workers/$id/revoke", JSONObject())
+    }
+
+    /** Claims (server-side status 0 -> 2) and returns up to [limit] queued
+     *  messages for [workerId], oldest first. Each returned message must be
+     *  followed by [reportSmsResult] once it's been attempted - a claimed
+     *  message that's never reported stays claimed forever. */
+    suspend fun pullPendingSms(workerId: Long, limit: Int = 20): List<PendingSms> {
+        val response = withContext(Dispatchers.IO) {
+            val req = Request.Builder()
+                .url(baseUrl.trimEnd('/') + "/api/v1/admin/sms/pending?workerId=$workerId&limit=$limit")
+                .header("X-Admin-Token", adminToken)
+                .get()
+                .build()
+            try {
+                client.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    if (!resp.isSuccessful) {
+                        val message = try {
+                            JSONObject(body).optString("error", "HTTP ${resp.code}")
+                        } catch (e: Exception) {
+                            "HTTP ${resp.code}"
+                        }
+                        throw AdminApiException(message)
+                    }
+                    body
+                }
+            } catch (e: IOException) {
+                throw AdminApiException("Network error: ${e.message}")
+            }
+        }
+        val array = JSONArray(response)
+        return (0 until array.length()).map { i ->
+            val o = array.getJSONObject(i)
+            PendingSms(
+                id = o.getLong("id"),
+                to = o.getString("to"),
+                message = o.getString("message")
+            )
+        }
+    }
+
+    /** Reports the outcome of a message previously claimed via [pullPendingSms].
+     *  [error] null means success; a non-null description means it failed. */
+    suspend fun reportSmsResult(id: Long, error: String?) {
+        val payload = JSONObject().apply {
+            if (error != null) put("error", error)
+        }
+        request("PATCH", "/api/v1/admin/sms/$id/report", payload)
     }
 }

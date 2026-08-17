@@ -15,6 +15,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -33,6 +34,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -99,10 +102,15 @@ fun AdminApp() {
     var workerFilter by remember { mutableStateOf(WorkerFilter.ALL) }
     var backgroundSyncEnabled by remember { mutableStateOf(settings.backgroundSyncEnabled) }
     var pullEnabled by remember { mutableStateOf(settings.pullEnabled) }
+    var workerId by remember { mutableStateOf(settings.workerId) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* notification is best-effort; service runs either way */ }
+
+    val smsPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { /* if denied, sending just fails per-message and logs Undelivered */ }
 
     fun setBackgroundSync(enabled: Boolean) {
         backgroundSyncEnabled = enabled
@@ -114,6 +122,8 @@ fun AdminApp() {
         settings.pullEnabled = enabled
         val serviceIntent = Intent(context, SyncService::class.java)
         if (enabled && adminToken.isNotBlank()) {
+            EventLog.clear(context)
+            EventLog.markStarted(context)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 ContextCompat.checkSelfPermission(
                     context, Manifest.permission.POST_NOTIFICATIONS
@@ -297,12 +307,23 @@ fun AdminApp() {
             onToggleBackgroundSync = { setBackgroundSync(!backgroundSyncEnabled) },
             pullEnabled = pullEnabled,
             onTogglePull = { setPullEnabled(!pullEnabled) },
+            workers = workers,
+            initialWorkerId = workerId,
             onDismiss = { showSettingsDialog = false },
-            onSave = { newBaseUrl, newToken ->
+            onSave = { newBaseUrl, newToken, newWorkerId ->
                 baseUrl = newBaseUrl
                 adminToken = newToken
+                workerId = newWorkerId
                 settings.baseUrl = newBaseUrl
                 settings.adminToken = newToken
+                settings.workerId = newWorkerId
+                if (newWorkerId != null &&
+                    ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.SEND_SMS
+                    ) != PackageManager.PERMISSION_GRANTED
+                ) {
+                    smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+                }
                 showSettingsDialog = false
                 refresh()
             }
@@ -378,27 +399,29 @@ fun ActivityLogDialog(onDismiss: () -> Unit, onClear: () -> Unit) {
         title = { Text("Activity log") },
         text = {
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Text(
+                    "Started: " + (EventLog.startedAt.value?.let { Formatting.humanDate(it) } ?: "—"),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        "Started: " + (EventLog.startedAt.value?.let { Formatting.humanDate(it) } ?: "—"),
-                        style = MaterialTheme.typography.labelMedium
+                        "Pulled: ${EventLog.lastPullCount.value ?: "—"}",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f)
                     )
-                    Text("Pulled: ${EventLog.lastPullCount.value ?: "—"}", style = MaterialTheme.typography.labelMedium)
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Sent: ${stats.sent}", style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        "Sent: ${stats.sent}",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f)
+                    )
                     Text(
                         "Undelivered: ${stats.undelivered}",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (stats.undelivered > 0)
                             MaterialTheme.colorScheme.error
-                        else MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -423,6 +446,11 @@ fun ActivityLogDialog(onDismiss: () -> Unit, onClear: () -> Unit) {
 @Composable
 fun WorkerLogDialog(worker: Worker, onDismiss: () -> Unit) {
     val events = EventLog.eventsFor(worker.id)
+    // Successful sends are routine and pile up fast - a count says enough.
+    // Everything else (create/revoke, and especially undelivered/error) is
+    // rare or worth investigating, so those stay itemized.
+    val sentCount = events.count { it.type == EventType.SENT }
+    val notableEvents = events.filter { it.type != EventType.SENT }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -431,11 +459,13 @@ fun WorkerLogDialog(worker: Worker, onDismiss: () -> Unit) {
             Column {
                 Text(worker.phone, style = MaterialTheme.typography.bodyMedium)
                 Spacer(modifier = Modifier.height(8.dp))
-                if (events.isEmpty()) {
-                    Text("No activity logged for this worker yet.")
+                Text("Sent: $sentCount", style = MaterialTheme.typography.labelMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                if (notableEvents.isEmpty()) {
+                    Text("No other activity logged for this worker yet.")
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                        items(events) { event -> LogEventRow(event) }
+                        items(notableEvents) { event -> LogEventRow(event) }
                     }
                 }
             }
@@ -452,7 +482,7 @@ private fun LogEventRow(event: LogEvent) {
         Text(
             event.type.name,
             style = MaterialTheme.typography.labelMedium,
-            color = if (event.type == EventType.ERROR)
+            color = if (event.type == EventType.ERROR || event.type == EventType.UNDELIVERED)
                 MaterialTheme.colorScheme.error
             else MaterialTheme.colorScheme.primary
         )
@@ -508,11 +538,19 @@ fun SettingsDialog(
     onToggleBackgroundSync: () -> Unit,
     pullEnabled: Boolean,
     onTogglePull: () -> Unit,
+    workers: List<Worker>,
+    initialWorkerId: Long?,
     onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit
+    onSave: (String, String, Long?) -> Unit
 ) {
     val context = LocalContext.current
     var baseUrl by remember { mutableStateOf(initialBaseUrl) }
+    var selectedWorkerId by remember { mutableStateOf(initialWorkerId) }
+    var workerMenuExpanded by remember { mutableStateOf(false) }
+    // Only workers a message could actually be queued against - matches the
+    // 'from' constraint POST /sms enforces server-side (active + public).
+    val eligibleWorkers = workers.filter { it.revokedAt == null && it.isPublic }
+    val selectedWorker = eligibleWorkers.find { it.id == selectedWorkerId }
     // Never prefilled with the stored token - write-only. Saving anything,
     // even just a new server URL, requires re-entering it (same value or a
     // new one) since there's no way to tell "left blank" apart from "clear it".
@@ -581,6 +619,43 @@ fun SettingsDialog(
                         onCheckedChange = { onToggleBackgroundSync() }
                     )
                 }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("Send as worker", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "This device's own SIM must actually be that worker's number - " +
+                        "there's no way to fake the sender on a real SMS",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Box {
+                    TextButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { workerMenuExpanded = true }
+                    ) {
+                        Text(selectedWorker?.let { "${it.name} (${it.phone})" } ?: "Not configured")
+                    }
+                    DropdownMenu(
+                        expanded = workerMenuExpanded,
+                        onDismissRequest = { workerMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Not configured") },
+                            onClick = {
+                                selectedWorkerId = null
+                                workerMenuExpanded = false
+                            }
+                        )
+                        eligibleWorkers.forEach { worker ->
+                            DropdownMenuItem(
+                                text = { Text("${worker.name} (${worker.phone})") },
+                                onClick = {
+                                    selectedWorkerId = worker.id
+                                    workerMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
                 if (pullEnabled && !ignoringBatteryOptimizations) {
                     Spacer(modifier = Modifier.height(4.dp))
                     TextButton(
@@ -600,7 +675,7 @@ fun SettingsDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(baseUrl.trim(), token.trim()) },
+                onClick = { onSave(baseUrl.trim(), token.trim(), selectedWorkerId) },
                 enabled = baseUrl.isNotBlank() && token.isNotBlank()
             ) { Text("Save") }
         },

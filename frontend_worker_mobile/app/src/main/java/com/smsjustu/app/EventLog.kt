@@ -5,7 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import org.json.JSONArray
 import org.json.JSONObject
 
-enum class EventType { CREATE, REVOKE, ERROR }
+enum class EventType { CREATE, REVOKE, ERROR, SENT, UNDELIVERED }
 
 data class LogEvent(
     val timestamp: Long,
@@ -110,8 +110,8 @@ object EventLog {
         val boundary = startedAt.value ?: 0L
         val session = state.value.filter { it.timestamp >= boundary }
         return SessionStats(
-            sent = session.count { it.type == EventType.CREATE || it.type == EventType.REVOKE },
-            undelivered = session.count { it.type == EventType.ERROR }
+            sent = session.count { it.type == EventType.SENT },
+            undelivered = session.count { it.type == EventType.UNDELIVERED }
         )
     }
 

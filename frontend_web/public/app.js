@@ -1,5 +1,7 @@
 // Shared helpers: auth storage, nav rendering, fetch wrapper. Loaded by
-// every page before its own inline script.
+// every page before its own inline script, which is why oxlint can't see
+// these functions' call sites and would otherwise flag them as unused.
+/* eslint-disable no-unused-vars */
 const AUTH_STORAGE_KEY = "sms_api_key";
 
 function getApiKey() {
@@ -28,7 +30,7 @@ async function apiFetch(path, options = {}) {
   let body = null;
   try {
     body = await res.json();
-  } catch (err) {
+  } catch {
     body = null;
   }
   return { res, body };

@@ -1,125 +1,147 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Send SMS · SMS Processing</title>
-  <link rel="stylesheet" href="style.css" />
-</head>
-<body>
-  <header class="top">
-    <div class="brand">
-      <div class="brand-name"><span class="dot"></span> SMS Processing</div>
-      <a id="auth-pill" class="auth-pill" href="account.html">Log in</a>
-    </div>
-  </header>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Send SMS · SMS Processing</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <div class="brand-name"><span class="dot"></span> SMS Processing</div>
+        <a id="auth-pill" class="auth-pill" href="account.html">Log in</a>
+      </div>
+    </header>
 
-  <div class="page">
-    <nav class="tabs">
-      <a href="index.html" data-page="send">Send SMS</a>
-      <a href="account.html" data-page="account">Account</a>
-    </nav>
+    <div class="page">
+      <nav class="tabs">
+        <a href="index.html" data-page="send">Send SMS</a>
+        <a href="account.html" data-page="account">Account</a>
+      </nav>
 
-    <div id="gate" class="card" hidden>
-      <h2>Sign in to send a message</h2>
-      <p class="hint">You need an account and API key before you can queue an SMS.</p>
-      <a class="btn" href="account.html">Create account / log in</a>
-    </div>
-
-    <div id="send-view" hidden>
-      <h1>Send an SMS</h1>
-      <p class="subtitle">Queues a message for the worker device you choose below to send.</p>
-
-      <div class="card">
-        <form id="sms-form">
-          <label for="from">From</label>
-          <select id="from" required>
-            <option value="">Loading numbers…</option>
-          </select>
-
-          <label for="to">To</label>
-          <input id="to" type="tel" placeholder="+15551234567" required />
-
-          <label for="message">Message</label>
-          <textarea id="message" rows="4" placeholder="Type your message…" required></textarea>
-
-          <button type="submit">Queue SMS</button>
-        </form>
-        <div id="result" class="result" hidden></div>
+      <div id="gate" class="card" hidden>
+        <h2>Sign in to send a message</h2>
+        <p class="hint">
+          You need an account and API key before you can queue an SMS.
+        </p>
+        <a class="btn" href="account.html">Create account / log in</a>
       </div>
 
-      <p class="hint" style="text-align:center; margin-top: -0.5rem;">
-        No numbers to choose from? Ask your administrator to provision a worker for your account.
-      </p>
+      <div id="send-view" hidden>
+        <h1>Send an SMS</h1>
+        <p class="subtitle">
+          Queues a message for the worker device you choose below to send.
+        </p>
+
+        <div class="card">
+          <form id="sms-form">
+            <label for="from">From</label>
+            <select id="from" required>
+              <option value="">Loading numbers…</option>
+            </select>
+
+            <label for="to">To</label>
+            <input id="to" type="tel" placeholder="+15551234567" required />
+
+            <label for="message">Message</label>
+            <textarea
+              id="message"
+              rows="4"
+              placeholder="Type your message…"
+              required
+            ></textarea>
+
+            <button type="submit">Queue SMS</button>
+          </form>
+          <div id="result" class="result" hidden></div>
+        </div>
+
+        <p class="hint" style="text-align: center; margin-top: -0.5rem">
+          No numbers to choose from? Ask your administrator to provision a
+          worker for your account.
+        </p>
+      </div>
     </div>
-  </div>
 
-  <script src="app.js"></script>
-  <script>
-    initChrome("send");
+    <script src="app.js"></script>
+    <script>
+      initChrome("send");
 
-    const gate = document.getElementById("gate");
-    const view = document.getElementById("send-view");
+      const gate = document.getElementById("gate");
+      const view = document.getElementById("send-view");
 
-    if (!isLoggedIn()) {
-      gate.hidden = false;
-    } else {
-      view.hidden = false;
-      init();
-    }
-
-    function init() {
-      const form = document.getElementById("sms-form");
-      const result = document.getElementById("result");
-      const fromSelect = document.getElementById("from");
-
-      async function loadNumbers() {
-        fromSelect.innerHTML = '<option value="">Loading…</option>';
-        try {
-          const { res, body } = await apiFetch("/api/v1/numbers");
-          if (!res.ok) {
-            fromSelect.innerHTML = '<option value="">Could not load numbers - check your API key</option>';
-            return;
-          }
-          fromSelect.innerHTML = body.length
-            ? body.map((n) => `<option value="${n.id}">${n.phone}</option>`).join("")
-            : '<option value="">No numbers available yet</option>';
-        } catch (err) {
-          fromSelect.innerHTML = '<option value="">Failed to load numbers</option>';
-        }
+      if (!isLoggedIn()) {
+        gate.hidden = false;
+      } else {
+        view.hidden = false;
+        init();
       }
 
-      loadNumbers();
+      function init() {
+        const form = document.getElementById("sms-form");
+        const result = document.getElementById("result");
+        const fromSelect = document.getElementById("from");
 
-      form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const from = Number(fromSelect.value);
-        const to = document.getElementById("to").value;
-        const message = document.getElementById("message").value;
-
-        result.hidden = true;
-        const submitBtn = form.querySelector("button[type=submit]");
-        submitBtn.disabled = true;
-        try {
-          const { res, body } = await apiFetch("/api/v1/sms", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ to, from, message }),
-          });
-
-          if (res.ok) {
-            showResult(result, true, `Queued (id ${body.id}, status ${body.status})`);
-            document.getElementById("message").value = "";
-          } else {
-            showResult(result, false, `Error ${res.status}: ${body?.error || "unknown"}`);
+        async function loadNumbers() {
+          fromSelect.innerHTML = '<option value="">Loading…</option>';
+          try {
+            const { res, body } = await apiFetch("/api/v1/numbers");
+            if (!res.ok) {
+              fromSelect.innerHTML =
+                '<option value="">Could not load numbers - check your API key</option>';
+              return;
+            }
+            fromSelect.innerHTML = body.length
+              ? body
+                  .map((n) => `<option value="${n.id}">${n.phone}</option>`)
+                  .join("")
+              : '<option value="">No numbers available yet</option>';
+          } catch (err) {
+            fromSelect.innerHTML =
+              '<option value="">Failed to load numbers</option>';
           }
-        } catch (err) {
-          showResult(result, false, `Request failed: ${err.message}`);
-        } finally {
-          submitBtn.disabled = false;
         }
-      });
-    }
-  </script>
-</body>
+
+        loadNumbers();
+
+        form.addEventListener("submit", async (event) => {
+          event.preventDefault();
+          const from = Number(fromSelect.value);
+          const to = document.getElementById("to").value;
+          const message = document.getElementById("message").value;
+
+          result.hidden = true;
+          const submitBtn = form.querySelector("button[type=submit]");
+          submitBtn.disabled = true;
+          try {
+            const { res, body } = await apiFetch("/api/v1/sms", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ to, from, message }),
+            });
+
+            if (res.ok) {
+              showResult(
+                result,
+                true,
+                `Queued (id ${body.id}, status ${body.status})`,
+              );
+              document.getElementById("message").value = "";
+            } else {
+              showResult(
+                result,
+                false,
+                `Error ${res.status}: ${body?.error || "unknown"}`,
+              );
+            }
+          } catch (err) {
+            showResult(result, false, `Request failed: ${err.message}`);
+          } finally {
+            submitBtn.disabled = false;
+          }
+        });
+      }
+    </script>
+  </body>
 </html>

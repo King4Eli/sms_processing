@@ -60,10 +60,46 @@ Revokes any worker — stops it being selectable as `from` in `POST /sms`.
 `200` `{ id, revoked: true }` / `404` (no such id) / `409` (already
 revoked).
 
-## No worker-facing API
+## `GET /admin/sms/pending`
 
-A worker here is purely a sender identity a customer can pick as `from`
-(`POST /sms`, see [`api.md`](./api.md)) — there is no credential, no
-Bearer token, and no pull/report API for a worker device to consume the
-queue it lands in. `sms_queue` rows stay at `status = 0` (queued)
-indefinitely; nothing currently processes them.
+Query: `workerId` (required, integer — a `worker_tokens.id`), `limit`
+(optional, default `20`, capped at `50`).
+
+Claims up to `limit` queued (`status = 0`) `sms_queue` rows for that
+worker — oldest first — and flips them to `status = 2` (pulled,
+`pulled_at` set) as part of the same transaction (`SELECT ... FOR
+UPDATE`), so two devices polling at once can't both claim, and thus
+both send, the same message. Returns whatever it claimed; an empty
+array means nothing was waiting.
+
+`200`: `[{ id, to, message }, ...]`. Doesn't require the worker to still
+be active/public — a message queued before a revoke is still delivered.
+
+## `PATCH /admin/sms/:id/report`
+
+Body: `{ error? }` — omit (or send `null`) to report success, or a
+string to report failure (stored verbatim in `error_message`).
+
+Closes the loop on one message this device previously pulled: flips
+`status` from `2` (pulled) to `1` (processed), sets `processed_at`,
+increments `attempts`. Only works on a row currently in the pulled
+state — `409` on a re-report (e.g. a retried request after a response
+that got lost in transit) rather than silently double-counting.
+There's no automatic retry of failed sends; `attempts`/`error_message`
+are there for a future retry policy, not read by anything yet.
+
+`200`: `{ id, processed: true, success }` / `400` (bad id/body) / `404`
+(no such id) / `409` (wasn't in the pulled state).
+
+## Worker device flow
+
+This pull/report pair is what the [smsJustu mobile
+app](./worker-mobile.md) uses to actually send: a device is configured
+to act as one specific worker (its `phone_number` has to genuinely be
+that device's own SIM number, or recipients would see the wrong
+sender), and on each sync cycle pulls pending messages for that
+`workerId`, sends each via the device's default SIM
+(`SmsManager`), and reports the outcome. There's still no per-worker
+credential — the device authenticates with the same shared
+`X-Admin-Token` as the rest of this API, scoped only by which
+`workerId` it asks for.

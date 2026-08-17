@@ -1,16 +1,19 @@
 package com.smsjustu.app
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -75,9 +78,16 @@ class SyncService : Service() {
                 )
                 try {
                     wakeLock.acquire(30_000)
-                    val workers = AdminApiClient(settings.baseUrl, token).listWorkers()
+                    val client = AdminApiClient(settings.baseUrl, token)
+                    val workers = client.listWorkers()
                     val active = workers.count { it.revokedAt == null }
                     EventLog.recordPull(this@SyncService, workers.size)
+
+                    val workerId = settings.workerId
+                    if (workerId != null && hasSendSmsPermission()) {
+                        drainPendingSms(client, workerId)
+                    }
+
                     notify("$active active worker(s) · last synced ${timeNow()} · ${statsLine()}")
                 } catch (e: Exception) {
                     EventLog.add(this@SyncService, EventType.ERROR, "Pull failed: ${e.message}")
@@ -89,6 +99,36 @@ class SyncService : Service() {
             delay(SYNC_INTERVAL_MS)
         }
     }
+
+    /** Claims and sends whatever's queued for [workerId], one at a time, via
+     *  the device's default SIM - see SmsSender. Each message is reported
+     *  back (success or failure) regardless of send outcome, so it doesn't
+     *  stay claimed server-side forever; a failed *report* (network blip
+     *  right after a successful send) is swallowed since the send itself
+     *  already happened and there's nothing useful to retry here. */
+    private suspend fun drainPendingSms(client: AdminApiClient, workerId: Long) {
+        try {
+            val pending = client.pullPendingSms(workerId)
+            for (sms in pending) {
+                val error = SmsSender.send(this@SyncService, sms.id, sms.to, sms.message)
+                runCatching { client.reportSmsResult(sms.id, error) }
+                if (error == null) {
+                    EventLog.add(this@SyncService, EventType.SENT, "Sent to ${sms.to}", workerId)
+                } else {
+                    EventLog.add(
+                        this@SyncService, EventType.UNDELIVERED,
+                        "Failed to ${sms.to}: $error", workerId
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            EventLog.add(this@SyncService, EventType.ERROR, "Sms pull failed: ${e.message}")
+        }
+    }
+
+    private fun hasSendSmsPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) ==
+            PackageManager.PERMISSION_GRANTED
 
     private fun timeNow(): String =
         SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
