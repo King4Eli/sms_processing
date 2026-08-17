@@ -1,31 +1,21 @@
-# Run with: docker compose --env-file ./.env/db.env up -d --build
-# (--env-file is required because DB credentials live in ./.env/db.env,
-# not the ./.env that Compose auto-loads — and ./.env here is a directory
-# anyway, which Compose silently ignores for auto-loading.)
-#
-# Schema is applied automatically on api startup from _docs/schema.sql -
-# no separate migrate step.
-#
-# ./.env/admin.env holds ADMIN_TOKEN, the shared secret gating
-# /api/v1/admin/* (worker management) - see _docs/admin-api.md. Without
-# it the admin API responds 503, everything else is unaffected.
+name: sms_justu
 
 services:
   api:
-    build:
-      context: .
-      dockerfile: api/Dockerfile
+    container_name: sms_justu_api
+    image: kingeli/sms_justu_api:1.0.0
     restart: unless-stopped
     env_file:
       - ./.env/db.env
       - ./.env/admin.env
     ports:
-      - "3000:3000"
+      - "10.50.0.1:9702:3000"
 
   frontend:
-    build: ./frontend_web
+    container_name: sms_justu_webui
+    image: kingeli/sms_justu_webui:1.0.0
     restart: unless-stopped
     ports:
-      - "8080:80"
+      - "10.50.0.1:9701:80"
     depends_on:
       - api

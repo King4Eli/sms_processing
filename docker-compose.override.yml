@@ -1,0 +1,14 @@
+name: sms_justu
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "3000:3000"
+
+  frontend:
+    build: ./frontend_web
+    ports:
+      - "8080:80"
