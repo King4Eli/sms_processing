@@ -87,30 +87,34 @@ router.post(
 );
 
 // Lists the numbers available to send from, so a customer can pick one
-// for 'from' below: every PUBLIC worker number (shared, from anyone) plus
-// any private worker an admin has assigned to this caller specifically
-// (worker_tokens.user_id, set via POST /admin/workers - see adminApi.js;
-// customers can never create or own a worker themselves). Someone else's
-// private worker never appears here.
+// for 'from' below: every PUBLIC worker (shared, from anyone) - workers
+// are never assigned to a specific customer, so private ones never
+// appear here for anyone, not even the admin who created them. Returns
+// 'id' (what POST /sms 'from' expects) alongside 'phone' for display -
+// phone numbers are reusable once a worker is revoked (see
+// uq_worker_tokens_active_phone_number in schema.sql), so the id is the
+// only stable reference to a specific worker.
 router.get(
   "/numbers",
   customerAuth,
   wrap(async (req, res) => {
     const [rows] = await pool.query(
-      `SELECT phone_number FROM worker_tokens
-     WHERE revoked_at IS NULL AND (is_public = 1 OR user_id = ?)
+      `SELECT id, phone_number FROM worker_tokens
+     WHERE revoked_at IS NULL AND is_public = 1
      ORDER BY phone_number ASC`,
-      [req.auth.userId],
     );
-    res.status(200).json(rows.map((r) => r.phone_number));
+    res
+      .status(200)
+      .json(rows.map((r) => ({ id: r.id, phone: r.phone_number })));
   }),
 );
 
 // Customer entry point into the queue. status starts at 0 (queued).
-// 'from' must be an active worker_tokens.phone_number that's either
-// public or admin-assigned to this caller (same visibility rule as GET
-// /numbers) - that worker becomes the only one that can ever pull/complete
-// this row (see workerApi.js). Limited to this key's api_keys.daily_sms_limit
+// 'from' is a worker_tokens.id (see GET /numbers) rather than a phone
+// number - a phone number alone can't uniquely identify a worker once
+// revoked numbers become reusable, so the id is the only safe reference.
+// It must resolve to an active, public worker (same visibility rule as
+// GET /numbers). Limited to this key's api_keys.daily_sms_limit
 // submissions per rolling 24h, computed straight from sms_queue - no
 // separate rate-limit table (see idx_sms_queue_api_key_created).
 router.post(
@@ -125,11 +129,9 @@ router.post(
           "'to' must be a valid phone number in international format, e.g. +15551234567",
       });
     }
-    const parsedFrom = parsePhone(from);
-    if (!parsedFrom) {
+    if (!Number.isInteger(from) || from <= 0) {
       return res.status(400).json({
-        error:
-          "'from' must be a valid phone number in international format, e.g. +15551234567",
+        error: "'from' must be a worker id (integer) - see GET /numbers",
       });
     }
     if (typeof message !== "string" || message.trim() === "") {
@@ -138,14 +140,14 @@ router.post(
 
     const [workerRows] = await pool.query(
       `SELECT id FROM worker_tokens
-     WHERE phone_number = ? AND revoked_at IS NULL AND (is_public = 1 OR user_id = ?) LIMIT 1`,
-      [parsedFrom.e164, req.auth.userId],
+     WHERE id = ? AND revoked_at IS NULL AND is_public = 1 LIMIT 1`,
+      [from],
     );
     if (workerRows.length === 0) {
       return res
         .status(400)
         .json({
-          error: "'from' is not a recognized sending number - see GET /numbers",
+          error: "'from' is not a recognized sending worker - see GET /numbers",
         });
     }
     const workerTokenId = workerRows[0].id;
@@ -176,7 +178,7 @@ router.post(
     res.status(201).json({
       id: result.insertId,
       to: parsedTo.e164,
-      from: parsedFrom.e164,
+      from: workerTokenId,
       message,
       status: 0,
     });

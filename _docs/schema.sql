@@ -30,13 +30,12 @@ CREATE TABLE IF NOT EXISTS api_keys (
 
 ALTER TABLE api_keys ADD COLUMN daily_sms_limit INT UNSIGNED NOT NULL DEFAULT 10;
 
--- Separate credential space for workers (the devices sending SMS).
--- Deliberately not shared with api_keys so a leaked customer key can never
--- pull or complete queue items.
+-- Sender identities ("workers") a customer can pick as 'from' in POST
+-- /sms - admin-managed only, see admin-api.md.
 CREATE TABLE IF NOT EXISTS worker_tokens (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  phone_number VARCHAR(32) NOT NULL, -- E.164-normalized "from" number this worker sends as; unique per worker
+  phone_number VARCHAR(32) NOT NULL, -- E.164-normalized "from" number this worker sends as; unique among active (non-revoked) workers, see uq_worker_tokens_active_phone_number below
   is_public TINYINT(1) NOT NULL DEFAULT 0, -- 1 = customers can see/select this number (GET /numbers, POST /sms 'from')
   token_hash CHAR(64) NOT NULL UNIQUE, -- sha256 hex digest of the plaintext token
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -46,26 +45,47 @@ CREATE TABLE IF NOT EXISTS worker_tokens (
 
 -- Nullable here only for pre-existing rows from before this column existed
 -- (multiple NULLs are allowed under a UNIQUE index, unlike multiple '').
--- The app always validates and supplies a real value on insert.
+-- The app always validates and supplies a real value on insert. Its
+-- uniqueness constraint is added further below (uq_worker_tokens_active_phone_number),
+-- not here - a plain unique key on this column was tried and dropped once
+-- revoked numbers started legitimately repeating.
 ALTER TABLE worker_tokens ADD COLUMN phone_number VARCHAR(32) NULL AFTER name;
-ALTER TABLE worker_tokens ADD UNIQUE KEY uq_worker_tokens_phone_number (phone_number);
 ALTER TABLE worker_tokens ADD COLUMN is_public TINYINT(1) NOT NULL DEFAULT 0 AFTER phone_number;
 
--- Optional customer this worker is privately assigned to, set by an admin
--- (POST /admin/workers or scripts/create-worker-token.js) - customers
--- never set this themselves, there is no self-service worker creation.
--- NULL = global/unassigned. An assigned owner may always select that
--- worker's number as 'from', public or not - see GET /numbers / POST
--- /sms in userApi.js.
-ALTER TABLE worker_tokens ADD COLUMN user_id BIGINT UNSIGNED NULL AFTER name;
-ALTER TABLE worker_tokens ADD CONSTRAINT fk_worker_tokens_user FOREIGN KEY (user_id) REFERENCES users(id);
-ALTER TABLE worker_tokens ADD INDEX idx_worker_tokens_user (user_id);
+-- A revoked worker's number frees up for reuse - uniqueness should only
+-- apply among active workers, not the full history. MySQL has no native
+-- partial/filtered unique index, so this is done with a generated column
+-- that collapses to NULL once revoked; UNIQUE indexes treat every NULL as
+-- distinct, so any number of revoked rows (or one revoked + one fresh
+-- active row) can now share a phone_number, while two simultaneously
+-- active rows still can't. All lookups that key off phone_number already
+-- filter revoked_at IS NULL (see userApi.js), so they keep resolving to
+-- at most one row.
+ALTER TABLE worker_tokens DROP INDEX uq_worker_tokens_phone_number;
+ALTER TABLE worker_tokens ADD COLUMN active_phone_number VARCHAR(32)
+  GENERATED ALWAYS AS (CASE WHEN revoked_at IS NULL THEN phone_number END) VIRTUAL
+  AFTER phone_number;
+ALTER TABLE worker_tokens ADD UNIQUE KEY uq_worker_tokens_active_phone_number (active_phone_number);
+
+-- Workers are never assigned to a specific customer - 'is_public' is the
+-- only visibility control (see userApi.js). This column/FK/index existed
+-- briefly for that now-removed per-customer assignment; drop them for any
+-- database that already applied it.
+ALTER TABLE worker_tokens DROP FOREIGN KEY fk_worker_tokens_user;
+ALTER TABLE worker_tokens DROP INDEX idx_worker_tokens_user;
+ALTER TABLE worker_tokens DROP COLUMN user_id;
+
+-- The worker API (pull/report SMS over a per-worker Bearer token) has
+-- been removed entirely - nothing validates this credential anymore, so
+-- there's no reason to keep issuing or storing one. Dropping the column
+-- also drops its implicit unique index.
+ALTER TABLE worker_tokens DROP COLUMN token_hash;
 
 CREATE TABLE IF NOT EXISTS sms_queue (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id BIGINT UNSIGNED NOT NULL,
   api_key_id BIGINT UNSIGNED NOT NULL,
-  worker_token_id BIGINT UNSIGNED NOT NULL, -- the "from" number picked at submission; pull is scoped to this worker only
+  worker_token_id BIGINT UNSIGNED NOT NULL, -- the "from" worker picked at submission (see POST /sms in userApi.js)
   to_number VARCHAR(32) NOT NULL,
   message TEXT NOT NULL,
   status TINYINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '0=queued, 1=processed, 2=pulled',
@@ -91,8 +111,10 @@ ALTER TABLE sms_queue ADD INDEX idx_sms_queue_api_key_created (api_key_id, creat
 -- always supplies a real value on insert going forward.
 ALTER TABLE sms_queue ADD COLUMN worker_token_id BIGINT UNSIGNED NULL AFTER api_key_id;
 ALTER TABLE sms_queue ADD CONSTRAINT fk_sms_queue_worker_token FOREIGN KEY (worker_token_id) REFERENCES worker_tokens(id);
--- Supports POST /worker/sms/pull's WHERE worker_token_id = ? AND status = 0
--- ORDER BY created_at query.
+-- Originally sized for the now-removed worker API's pull query (WHERE
+-- worker_token_id = ? AND status = 0 ORDER BY created_at) - kept as-is
+-- since InnoDB still needs *some* index on worker_token_id to back
+-- fk_sms_queue_worker_token; not worth a migration just to shrink it.
 ALTER TABLE sms_queue ADD INDEX idx_sms_queue_worker_status_created (worker_token_id, status, created_at);
 
 -- Applies the status COMMENT to installs from before it was added (this

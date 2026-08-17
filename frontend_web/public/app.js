@@ -40,41 +40,6 @@ function maskKey(key) {
   return `${key.slice(0, 6)}${"•".repeat(6)}${key.slice(-4)}`;
 }
 
-// Admin token: deliberately separate storage/header from the customer
-// API key above - an admin token must never be sent as X-Api-Key or
-// vice versa.
-const ADMIN_STORAGE_KEY = "sms_admin_token";
-
-function getAdminToken() {
-  return localStorage.getItem(ADMIN_STORAGE_KEY) || "";
-}
-
-function setAdminToken(token) {
-  localStorage.setItem(ADMIN_STORAGE_KEY, token);
-}
-
-function clearAdminToken() {
-  localStorage.removeItem(ADMIN_STORAGE_KEY);
-}
-
-function isAdmin() {
-  return getAdminToken().length > 0;
-}
-
-async function adminFetch(path, options = {}) {
-  const headers = Object.assign({}, options.headers);
-  const token = getAdminToken();
-  if (token) headers["X-Admin-Token"] = token;
-  const res = await fetch(path, Object.assign({}, options, { headers }));
-  let body = null;
-  try {
-    body = await res.json();
-  } catch (err) {
-    body = null;
-  }
-  return { res, body };
-}
-
 // Renders the auth pill in the top header (logged in state / login link)
 // and highlights the active nav tab. Call once per page on load.
 function initChrome(activePage) {

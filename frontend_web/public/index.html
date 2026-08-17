@@ -82,7 +82,7 @@
             return;
           }
           fromSelect.innerHTML = body.length
-            ? body.map((n) => `<option value="${n}">${n}</option>`).join("")
+            ? body.map((n) => `<option value="${n.id}">${n.phone}</option>`).join("")
             : '<option value="">No numbers available yet</option>';
         } catch (err) {
           fromSelect.innerHTML = '<option value="">Failed to load numbers</option>';
@@ -93,7 +93,7 @@
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const from = fromSelect.value;
+        const from = Number(fromSelect.value);
         const to = document.getElementById("to").value;
         const message = document.getElementById("message").value;
 

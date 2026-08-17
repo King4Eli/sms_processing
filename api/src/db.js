@@ -37,8 +37,10 @@ async function ensureSchema() {
     try {
       await pool.query(statement);
     } catch (err) {
-      const alreadyExists = [1050, 1060, 1061, 1826].includes(err.errno); // table/column/index/FK exists
-      if (!alreadyExists) throw err;
+      const alreadyApplied = [1050, 1060, 1061, 1091, 1826].includes(
+        err.errno,
+      ); // table/column/index exists, or (for DROP) already doesn't
+      if (!alreadyApplied) throw err;
     }
   }
 }
