@@ -23,7 +23,7 @@ services:
       - "3000:3000"
 
   frontend:
-    build: ./frontend
+    build: ./frontend_web
     restart: unless-stopped
     ports:
       - "8080:80"
